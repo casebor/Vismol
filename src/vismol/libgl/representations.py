@@ -384,7 +384,7 @@ class LinesRepresentation(Representation):
         GL.glBindVertexArray(self.vao)
         #print(self.vm_object.cov_radii_array)
         
-        '''simples bonds  or multiple bonds'''
+        #'''simples bonds  or multiple bonds'''
         #if self.ratio_vbo == None:
         #    try:
         #        self.vm_object._get_covalent_radii()
