@@ -385,16 +385,16 @@ class LinesRepresentation(Representation):
         #print(self.vm_object.cov_radii_array)
         
         '''simples bonds  or multiple bonds'''
-        if self.ratio_vbo == None:
-            try:
-                self.vm_object._get_covalent_radii()
-                self.size_vbo, self.ratio_vbo = self._make_gl_impostor_buffer(self.vm_object.cov_radii_array, self.shader_program)
-            except:
-                pass
-                #print('Failed: self.vm_object._get_covalent_radii()')
-        else:
-            pass
-            #self.size_vbo, self.ratio_vbo = self._make_gl_impostor_buffer(self.vm_object.cov_radii_array, self.shader_program)
+        #if self.ratio_vbo == None:
+        #    try:
+        #        self.vm_object._get_covalent_radii()
+        #        self.size_vbo, self.ratio_vbo = self._make_gl_impostor_buffer(self.vm_object.cov_radii_array, self.shader_program)
+        #    except:
+        #        pass
+        #        #print('Failed: self.vm_object._get_covalent_radii()')
+        #else:
+        #    pass
+        #    #self.size_vbo, self.ratio_vbo = self._make_gl_impostor_buffer(self.vm_object.cov_radii_array, self.shader_program)
 
 
 
