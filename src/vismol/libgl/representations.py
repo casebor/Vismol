@@ -1097,8 +1097,9 @@ class CellLineRepresentation:
     def _load_coord_vbo(self, coord_vbo=False, sel_coord_vbo=False):
         """ This function assigns the coordinates to 
         be drawn by the function  draw_representation"""
-        #frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
-        frame = self.vm_object.cell_coordinates[0]
+        frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
+        #frame = self.vm_object.cell_coordinates[0]
+        frame = self.vm_object.cell_coordinates[f]
         if coord_vbo:
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coord_vbo)
             GL.glBufferData(GL.GL_ARRAY_BUFFER, frame.nbytes, frame, GL.GL_STATIC_DRAW)

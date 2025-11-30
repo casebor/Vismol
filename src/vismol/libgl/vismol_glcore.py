@@ -257,6 +257,7 @@ class VismolGLCore:
                                                                         self.atom_picked.name,
                                                                         self.atom_picked.index,
                                                                         self.atom_picked.symbol)
+                            self.info_atom = self.atom_picked
                             self.atom_picked = None
                             menu_type = "obj_menu"
                             info = label
