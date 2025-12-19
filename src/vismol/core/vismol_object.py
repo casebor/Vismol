@@ -469,7 +469,7 @@ class VismolObject:
         for atom in selection.values():
             indexes.append(atom.atom_id)
             gridpos_list.append(atom.get_grid_position(gridsize=gridsize, frame=frame))
-        
+        #print(  'grid elementes:',gridpos_list)
         if debug:
             logger.debug("Time used for preparing the atom mask, covalent radii list "\
                          "and grid positions: {}".format(time.time() - initial))
@@ -513,8 +513,16 @@ class VismolObject:
             # Calculate bonds based on grid positions and covalent radii and return the results
             index_bonds = cdist.get_atomic_bonds_from_grid(indexes, coords,
                                             cov_rads, gridpos_list, gridsize, maxbond, tolerance)
-            #print (index_bonds)
             
+#            msg = """Building grid elements  :
+#        Total number of Atoms   : {}
+#        Gridsize                : {}
+#        Bonds                   : {}
+#        Bonds calcultation time : {} seconds""".format(len(selection), gridsize,
+#                                    len(index_bonds), time.time() - initial)
+#            logger.info(msg)
+            
+                       
             # Dynamic bonds is not working properly for pure QC system
             #'''
             bonds = index_bonds

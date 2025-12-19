@@ -82,7 +82,7 @@ def _load_pdb_file(vismol_session, infile):
         
         if _atom["resi"] not in _chain.residues.keys():
             _r = Residue(vm_object, name=_atom["resn"], index=_atom["resi"], chain=_chain)
-            vm_object.residues[_atom["resi"]] = _r
+            #vm_object.residues[_atom["resi"]] = _r
             _chain.residues[_atom["resi"]] = _r
         _residue = _chain.residues[_atom["resi"]]
         

@@ -168,6 +168,7 @@ class VismolGLCore:
                 #print('picking_selection_mode:',self.vm_session.picking_selection_mode)
                 #
                 if self.vm_session.picking_selection_mode: # bachega 06 / 18 /2025
+                    #print(mouse_x, mouse_y, button_number)
                     pass 
                 else: # bachega 06 / 18 /2025
                     self.show_selection_box = True
@@ -346,6 +347,52 @@ class VismolGLCore:
                             vm_object.model_mat = mop.my_glTranslatef(vm_object.model_mat, np.array([0.0, 0.0, -self.scroll]))
                         if down:
                             vm_object.model_mat = mop.my_glTranslatef(vm_object.model_mat, np.array([0.0, 0.0, self.scroll]))
+        
+        elif self.shift:
+            #print(direction)
+            #theta = direction/10
+            
+            # Editing Dihedral Rotamer / moving group os atoms
+            if self.vm_session.picking_selection_mode:
+                theta = direction/10
+                atom1 = self.vm_session.picking_selections.picking_selections_list[0]
+                atom2 = self.vm_session.picking_selections.picking_selections_list[1]
+                atom3 = self.vm_session.picking_selections.picking_selections_list[2]
+                atom4 = self.vm_session.picking_selections.picking_selections_list[3]
+                
+                if atom1 and atom2 and atom3 and atom4:
+                                       
+                    subgroup = self.vm_session.picking_selections.subgroup
+                    index1   = atom2.index-1
+                    index2   = atom3.index-1
+                    vobject  = atom2.vm_object
+                    #print(subgroup)
+                    #self.vm_session.get_dihedral (theta)
+                    
+                    self.vm_session.rotate_dihedral ( 
+                                       vobject   = vobject, 
+                                       index1    = index1, 
+                                       index2    = index2, 
+                                       subgroup  = subgroup,
+                                       theta     = theta)
+                
+                elif atom1 and atom2 and not atom3 and not atom4:
+                    #print (atom1 ,atom2)
+                    index1   = atom1.index-1
+                    index2   = atom2.index-1
+                    subgroup = self.vm_session.picking_selections.subgroup
+                    vobject  = atom2.vm_object
+                    #print(direction)
+                    self.vm_session.move_subgroup  (
+                                       vobject   = vobject,
+                                       index1    = index1, 
+                                       index2    = index2, 
+                                       subgroup  = subgroup,
+                                       direction = direction)
+                                       
+                    
+                    
+                    
         else:
             pos_z = self.glcamera.get_position()[2]
             if up:

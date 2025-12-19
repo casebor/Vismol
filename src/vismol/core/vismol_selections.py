@@ -28,6 +28,7 @@ from vismol.utils import matrix_operations as mop
 from vismol.model.molecular_properties import solvent_dictionary as SOLV_DICT
 from vismol.core.vismol_object import VismolObject
 from vismol.model.atom import Atom
+import vismol.utils.c_distances as cdist
 
 
 class VismolViewingSelection:
@@ -401,7 +402,9 @@ class VismolPickingSelection:
         atom2 = self.picking_selections_list[1]
         atom3 = self.picking_selections_list[2]
         atom4 = self.picking_selections_list[3]
-
+        
+        #for dihedrals changes
+        self.subgroup = []
         #
         '''It is necessary to check which atoms are selected (being part 
         of the list of selected atoms). The solution applied is a bit 
@@ -414,7 +417,7 @@ class VismolPickingSelection:
             self.dist_pk1_pk2, self.mid_point_pk1_pk2 = self.get_dist ( self.xyz1, self.xyz2)
             self.vm_session.vm_geometric_object_dic["pk1pk2"].midpoint = self.mid_point_pk1_pk2
             self.vm_session.vm_geometric_object_dic["pk1pk2"].dist = self.dist_pk1_pk2
-
+            
             if atom3:
                 self.xyz3 = atom3.coords()
 
@@ -426,6 +429,22 @@ class VismolPickingSelection:
                     self.xyz4 = atom4.coords()
                     angle = mop.dihedral(self.xyz1, self.xyz2, self.xyz3, self.xyz4)
                     print ("Dihedral: ", angle*57.297)
+                    
+                    #devemos melhorar isso depois
+                    vobject  = atom2.vm_object
+                    topology = vobject.topology
+                    index1   = atom2.index-1
+                    index2   = atom3.index-1
+                    self.subgroup =  cdist.find_subgroup( index1, index2,  topology)
+                    #print(self.subgroup)
+        
+            else:
+                vobject  = atom1.vm_object
+                topology = vobject.topology
+                index1   = atom1.index-1
+                index2   = atom2.index-1
+                self.subgroup =  cdist.find_subgroup( index1, index2,  topology)
+        
         else:
             if self.vm_session.vm_geometric_object_dic["pk1pk2"]:
                 self.vm_session.vm_geometric_object_dic["pk1pk2"].representations["dash"].active = False
