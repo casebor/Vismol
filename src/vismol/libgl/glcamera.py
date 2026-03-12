@@ -142,9 +142,14 @@ class GLCamera():
     
     def get_modelview_position(self, model_matrix):
         modelview = mop.my_glMultiplyMatricesf(model_matrix, self.view_matrix)
-        crd_xyz = -1 * np.mat(modelview[:3,:3]) * np.mat(modelview[3,:3]).T
-        return crd_xyz.A1
-    
+        #crd_xyz = -1 * np.mat(modelview[:3,:3]) * np.mat(modelview[3,:3]).T
+        #return crd_xyz.A1
+        A = modelview[:3,:3]
+        T = modelview[3,:3]
+        crd_xyz = A @ T
+        #crd_xyz = modelview[:3,:3] @ modelview[3,:3]
+        return crd_xyz 
+        
     def _normalize_angles(self):
         """ DEPRECATED FUNCTION??? SEEMS TO NOT BE USED ANYWHERE
         """
