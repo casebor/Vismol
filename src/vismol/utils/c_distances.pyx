@@ -42,7 +42,11 @@ cpdef list find_subgroup(int atom1, int atom2, dict top):
     cdef list neighbors
 
     while queue:
-        current = queue.pop()
+        current = queue.pop()  # ou popleft() se quiser BFS
+
+        if current not in top:
+            continue  # evita quebrar e mantém consistência
+
         neighbors = top[current]
 
         for neighbor in neighbors:
@@ -52,8 +56,7 @@ cpdef list find_subgroup(int atom1, int atom2, dict top):
             visited.add(neighbor)
             subgroup.append(neighbor)
 
-            # Only proceed if this atom has branching
-            if len(top[neighbor]) > 1:
+            if neighbor in top and len(top[neighbor]) > 1:
                 queue.append(neighbor)
 
     return subgroup

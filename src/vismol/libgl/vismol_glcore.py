@@ -416,8 +416,71 @@ class VismolGLCore:
                                                     self.glcamera.min_znear, self.glcamera.z_far))
             self.glcamera.update_fog()
         self.parent_widget.queue_draw()
-    
+
     def _rotate_view(self, dx, dy, x, y):
+        """
+        Rotate the scene or selected objects based on mouse movement.
+        """
+
+        sens = self.vm_config.gl_parameters['mouse_rotation_sensibility']
+        dx *= sens
+        dy *= sens
+
+        angle = np.hypot(dx, dy) / max(self.width, self.height) * 180.0
+
+        # SHIFT → selection box update
+        if self.shift:
+            if self.vm_session.picking_selection_mode:
+                return False
+
+            self.selection_box.end = self.get_viewport_pos(self.mouse_x, self.mouse_y)
+            self.selection_box.update_points()
+            return True
+
+        # --- Compute rotation axis ---
+        if self.ctrl:
+            if abs(dx) >= abs(dy):
+                sign = -1 if (y - self.height / 2.0) >= 0 else 1
+                axis = np.array([0.0, 0.0, sign * dx], dtype=np.float32)
+            else:
+                sign = -1 if (x - self.width / 2.0) >= 0 else 1
+                axis = np.array([0.0, 0.0, sign * dy], dtype=np.float32)
+        else:
+            axis = np.array([-dy, -dx, 0.0], dtype=np.float32)
+
+        # Normalize axis
+        norm = np.linalg.norm(axis)
+        if norm == 0:
+            return False
+        axis /= norm
+
+        rotation_matrix = mop.my_glRotatef(np.identity(4), angle, axis)
+
+        # --- Apply rotation ---
+        def iter_all_objects():
+            yield from self.vm_session.vm_objects_dic.values()
+            for obj in self.vm_session.vm_geometric_object_dic.values():
+                if obj:
+                    yield obj
+
+        if self.editing_mols:
+            for obj in iter_all_objects():
+                if obj.editing:
+                    obj.model_mat = mop.my_glMultiplyMatricesf(obj.model_mat, rotation_matrix)
+        else:
+            self.model_mat = mop.my_glMultiplyMatricesf(self.model_mat, rotation_matrix)
+            for obj in iter_all_objects():
+                obj.model_mat = mop.my_glMultiplyMatricesf(obj.model_mat, rotation_matrix)
+
+        # --- Gizmo axis ---
+        if not self.editing_mols:
+            self.axis.model_mat = mop.my_glTranslatef(self.axis.model_mat, -self.axis.zrp)
+            self.axis.model_mat = mop.my_glRotatef(self.axis.model_mat, angle, axis)
+            self.axis.model_mat = mop.my_glTranslatef(self.axis.model_mat, self.axis.zrp)
+
+        return True                 
+
+    def _rotate_view_old(self, dx, dy, x, y):
         """ Function doc """
         dx =  dx*self.vm_config.gl_parameters['mouse_rotation_sensibility']
         dy =  dy*self.vm_config.gl_parameters['mouse_rotation_sensibility']
@@ -771,7 +834,75 @@ class VismolGLCore:
             logger.critical("Error compiling the shader: {}".format(shader_type))
             raise RuntimeError(logger.critical(GL.glGetShaderInfoLog(shader)))
         return shader
-    
+
+    def _selection_box_pick_new(self):
+        """
+        Select atoms using a rectangular selection box based on color picking.
+
+        This method renders a special background where each atom is encoded as a unique color.
+        Then, it reads pixels from the framebuffer inside the selection rectangle and decodes
+        them back into atom IDs.
+        """
+        
+        # Ensure mouse coordinates exist
+        if not hasattr(self, "mouse_x") or not hasattr(self, "mouse_y"):
+            return False
+        
+        # Original selection box corner (mouse press)
+        x1, y1 = self.selection_box_x, self.selection_box_y
+        # Current mouse position (convert Y from GTK to OpenGL coordinates)
+        x2, y2 = self.mouse_x, self.height - self.mouse_y
+
+
+        # Compute normalized rectangle (bottom-left corner + width/height)
+        pos_x = int(max(0, min(x1, x2)))
+        pos_y = int(max(0, min(y1, y2)))
+        width = int(abs(x2 - x1))
+        height = int(abs(y2 - y1))
+
+        # Ignore empty selections
+        if width == 0 or height == 0:
+            return False
+
+        # Clear buffers before rendering picking scene
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+        # Render all active objects using their selection representation
+        for vm_object in self.vm_session.vm_objects_dic.values():
+            if not vm_object.active:
+                continue
+            for rep in vm_object.representations.values():
+                if rep and rep.active:
+                    rep.draw_background_sel_representation()
+
+        # Ensure tight packing of pixel data (no row alignment padding)
+        GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+        
+        # Read pixels from framebuffer within the selection rectangle
+        data = GL.glReadPixels(pos_x, pos_y, width, height,
+                               GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+
+        # Decode RGB values into unique IDs
+        # Each pixel encodes an ID as: R + G*256 + B*256^2
+        picked_set = {
+            data[i] + data[i+1]*256 + data[i+2]*256*256
+            for i in range(0, len(data), 4)
+        }
+
+        atom_dic = self.vm_session.atom_dic_id
+        
+        # Convert IDs into atom objects, ignoring background (white = 16777215)
+        selected = {
+            atom_dic[pid] for pid in picked_set
+            if pid != 16777215 and pid in atom_dic
+        }
+
+        # Apply selection (disable=False means additive selection)
+        self.vm_session._selection_function_set(selected, disable=False)
+        
+        # Disable selection box picking mode
+        self.selection_box_picking = False
+
     def _selection_box_pick(self):
         """ Selects a set of atoms from pixels obtained by the rectangle selection.  
             This function (method) is called in the render method, when the 
@@ -786,14 +917,32 @@ class VismolGLCore:
         # In GTK, x=0 and y=0 set to upper left corner (unlike openGL input data, 
         # the following lines do the coordinate conversion) 
         
-        try: # bachega 06 / 18 /2025
-            selection_box_x2 = self.mouse_x
-            selection_box_y2 = self.height - self.mouse_y
-            selection_box_width  = selection_box_x2 - self.selection_box_x
-            selection_box_height = selection_box_y2 - self.selection_box_y
-        except: # bachega 06 / 18 /2025
-            return False
+        #try: # bachega 06 / 18 /2025
+        #    selection_box_x2 = self.mouse_x
+        #    selection_box_y2 = self.height - self.mouse_y
+        #    selection_box_width  = selection_box_x2 - self.selection_box_x
+        #    selection_box_height = selection_box_y2 - self.selection_box_y
+        #except: # bachega 06 / 18 /2025
+        #    return False
         
+        
+        # Bachega 03/22/2026 
+        mouse_x = getattr(self, "mouse_x", None)
+        mouse_y = getattr(self, "mouse_y", None)
+
+        if mouse_x is None or mouse_y is None:
+            return False
+        x2 = mouse_x
+        y2 = self.height - mouse_y  # convert to OpenGL coordinates
+        
+        try:
+            width = x2 - self.selection_box_x
+            height = y2 - self.selection_box_y
+        except:
+            return None
+
+        '''
+        #Simplificar cálculo do retângulo (grande melhoria)
         #Looking for the lower left corner of the checkbox
         if selection_box_width > 0 and selection_box_height > 0:
             pos_x = self.selection_box_x
@@ -823,21 +972,48 @@ class VismolGLCore:
             pos_x = 0.0
         if pos_y < 0:
             pos_y = 0.0
+        #'''
         
+        #       cleaner and shoter bachega 03/22/2026
+        # -------------------------------------------------
+        x1 = self.selection_box_x
+        y1 = self.selection_box_y
+        x2 = self.mouse_x
+        y2 = self.height - self.mouse_y
+
+        pos_x = int(min(x1, x2))
+        pos_y = int(min(y1, y2))
+        width = int(abs(x2 - x1))
+        height = int(abs(y2 - y1))
+        # -------------------------------------------------
+
+        # -------------------------------------------------
         GL.glClearColor(1, 1, 1, 1)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
         for index, vm_object in self.vm_session.vm_objects_dic.items():
             if vm_object.active:
                 #vismol_object has few different types of representations
+                '''
                 for rep_name in vm_object.representations:
                     # checking all the representations in vismol_object.representations dictionary
                     if vm_object.representations[rep_name] is not None:
                         #  vismol_object.representations[rep_name] may be active or not  True/False
                         if vm_object.representations[rep_name].active:
                             vm_object.representations[rep_name].draw_background_sel_representation()
-        
+                '''
+                # bachega 03/22/2026
+                for rep in vm_object.representations.values():
+                    if rep and rep.active:
+                        rep.draw_background_sel_representation()
+        # -------------------------------------------------
+
+        '''
+        # this is an old version
         GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
-        data = GL.glReadPixels(float(pos_x), float(pos_y), width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        #data = GL.glReadPixels(float(pos_x), float(pos_y), width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        # Bachega 03/22/2026
+        data = GL.glReadPixels(int(pos_x), int(pos_y), int(width), int(height),
+                       GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
         data = list(data)
         picked_set = set()
         for i in range(0, len(data), 4):
@@ -858,8 +1034,101 @@ class VismolGLCore:
                 # self.vm_session._selection_function(selected=self.atom_picked, disable=False)
         self.vm_session._selection_function_set(_selected, disable=False)
         self.selection_box_picking = False
-    
+        '''
+
+
+        GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+
+        # Read pixels (RGBA, unsigned byte)
+        data = GL.glReadPixels(
+            int(pos_x), int(pos_y),
+            int(width), int(height),
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE
+        )
+
+        BACKGROUND_ID = 16777215
+        atom_dic = self.vm_session.atom_dic_id
+
+        # Decode RGB → ID (ignore alpha)
+        picked_ids = {
+            data[i] + (data[i+1] << 8) + (data[i+2] << 16)
+            for i in range(0, len(data), 4)
+        }
+
+        # Map IDs → atoms (filter background + missing IDs)
+        selected = {
+            atom_dic[pid]
+            for pid in picked_ids
+            if pid != BACKGROUND_ID and pid in atom_dic
+        }
+
+        # Apply selection
+        self.vm_session._selection_function_set(selected, disable=False)
+
+        # Disable selection mode
+        self.selection_box_picking = False
+
+
+        
     def _pick(self):
+        """
+        Perform single-pixel picking using color-encoded IDs.
+        """
+
+        BACKGROUND_ID = 16777215
+
+        # Clear buffers before rendering picking scene
+        GL.glClearColor(1, 1, 1, 1)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+        # Render selection representations
+        for vm_object in self.vm_session.vm_objects_dic.values():
+            if not vm_object.active:
+                continue
+
+            for rep in vm_object.representations.values():
+                if rep and rep.active:
+                    rep.draw_background_sel_representation()
+
+        # Ensure tight packing
+        GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+
+        # Convert coordinates (GTK → OpenGL)
+        x = int(self.picking_x)
+        y = int(self.height - self.picking_y)
+
+        # Read single pixel
+        data = GL.glReadPixels(x, y, 1, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+
+        # Decode RGB → ID
+        pickedID = data[0] + data[1] * 256 + data[2] * 256 * 256
+
+        atom_dic = self.vm_session.atom_dic_id
+
+        if pickedID == BACKGROUND_ID:
+            self.atom_picked = None
+
+            if self.button == 1:
+                self.vm_session._selection_function_set(None)
+                self.button = None
+        else:
+            atom = atom_dic.get(pickedID)
+
+            if atom is not None:
+                self.atom_picked = atom
+
+                if self.button == 1:
+                    print(atom)
+                    self.vm_session._selection_function_set({atom})
+                    self.button = None
+            else:
+                logger.debug(f"pickedID {pickedID} not found")
+                self.button = None
+
+        self.picking = False
+        return True
+
+    def _pick_old(self):
         """ Function doc """
         GL.glClearColor(1, 1, 1, 1)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
@@ -1500,7 +1769,7 @@ class VismolGLCore:
         py = (2.0 * y - self.height) / self.height
         return np.array([px, -py], dtype=np.float32)
     
-    def _mouse_pos(self, x, y):
+    def _mouse_pos_old(self, x, y):
         """
         Use the ortho projection and viewport information
         to map from mouse co-ordinates back into world
@@ -1512,13 +1781,106 @@ class VismolGLCore:
         py = self.top + py * (self.bottom - self.top)
         pz = self.glcamera.z_near
         return px, py, pz
-    
+
+    def _mouse_pos(self, x, y):
+        """
+        Convert screen (mouse) coordinates to world coordinates
+        using orthographic projection.
+
+        Assumes:
+        - Screen origin is top-left (e.g., GTK)
+        - OpenGL origin is bottom-left
+        """
+
+        # Avoid division by zero
+        if self.width == 0 or self.height == 0:
+            return None
+
+        # Normalize to [0, 1]
+        nx = float(x) / float(self.width)
+        ny = 1.0 - (float(y) / float(self.height))  # invert Y axis
+
+        # Map to world coordinates
+        world_x = self.left + nx * (self.right - self.left)
+        world_y = self.bottom + ny * (self.top - self.bottom)
+
+        # Use near plane as default Z
+        world_z = self.glcamera.z_near
+
+        return world_x, world_y, world_z
+
     def center_on_atom(self, atom):
         """ Function doc
         """
         frame_index = self._get_vismol_object_frame(atom.vm_object)
         self.center_on_coordinates(atom.vm_object, atom.coords(frame_index))
-    
+
+    def center_on_coordinates_new(self, vismol_object, target):
+        """
+        Smoothly translate all objects so that the target coordinate becomes centered.
+        
+        Takes the coordinates of an atom in absolute coordinates and first
+        transforms them in 4D world coordinates, then takes the unit vector
+        of that atom position to generate the loop animation. To generate
+        the animation, first obtains the distance from the zero reference
+        point (always 0,0,0) to the atom, then divides this distance in a
+        defined number of cycles, this result will be the step for
+        translation. For the translation, the world will move a number of
+        steps defined, and every new point will be finded by multiplying the
+        unit vector by the step. As a final step, to avoid biases, the world
+        will be translated to the atom position in world coordinates.
+        The effects will be applied on the model matrices of every VisMol
+        object and the model matrix of the window.
+        
+        """
+
+        if not np.allclose(self.zero_reference_point, target):
+            self.zero_reference_point[:] = target
+
+            target_pos_4d = np.array([*target, 1.0], dtype=np.float32)
+
+            # Transform to world space
+            target_in_world = vismol_object.model_mat.T.dot(target_pos_4d)[:3]
+
+            norm = np.linalg.norm(target_in_world)
+            if norm == 0:
+                return
+
+            unit_vec = target_in_world / norm
+
+            steps = self.vm_config.gl_parameters.get("center_steps", 15)
+            step_size = norm / steps
+
+            def iter_all_objects():
+                yield from self.vm_session.vm_objects_dic.values()
+                for obj in self.vm_session.vm_geometric_object_dic.values():
+                    if obj:
+                        yield obj
+
+            # Animate movement
+            for _ in range(steps):
+                delta = unit_vec * step_size
+
+                for obj in iter_all_objects():
+                    obj.model_mat = mop.my_glTranslatef(obj.model_mat, -delta)
+
+                # Trigger redraw (GTK)
+                if self.vm_session.toolkit == "Gtk_3.0":
+                    win = self.parent_widget.get_window()
+                    win.invalidate_rect(None, False)
+                    win.process_updates(False)
+                else:
+                    raise RuntimeError("Not implemented for Qt5 yet")
+
+                time.sleep(self.vm_config.gl_parameters["center_on_coord_sleep_time"])
+
+            # Final correction to eliminate accumulated error
+            for obj in iter_all_objects():
+                final_pos = obj.model_mat.T.dot(target_pos_4d)[:3]
+                obj.model_mat = mop.my_glTranslatef(obj.model_mat, -final_pos)
+
+            self.parent_widget.queue_draw()
+
     def center_on_coordinates(self, vismol_object, target):
         """ Takes the coordinates of an atom in absolute coordinates and first
             transforms them in 4D world coordinates, then takes the unit vector

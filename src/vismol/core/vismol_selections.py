@@ -435,7 +435,10 @@ class VismolPickingSelection:
                     topology = vobject.topology
                     index1   = atom2.index-1
                     index2   = atom3.index-1
+                    #try:
                     self.subgroup =  cdist.find_subgroup( index1, index2,  topology)
+                    #except:
+                    #    print('subgroup not found')
                     #print(self.subgroup)
         
             else:
