@@ -31,7 +31,7 @@ class Atom:
     
     def __init__(self, vismol_object, name="Xx", index=None, residue=None,
                  chain=None, pos=None, symbol=None, atom_id=None, color=None,
-                 vdw_rad=None, cov_rad=None, ball_rad=None,
+                 vdw_rad=None, cov_rad=None, ball_rad=None, electronegativity=None,
                  occupancy=0.0, bfactor=0.0, charge=0.0, bonds_indexes=None):
         """ Class initializer """
         self.vm_object   = vismol_object
@@ -73,6 +73,12 @@ class Atom:
             self.ball_rad = self._init_ball_rad()
         else:
             self.ball_rad = ball_rad
+        
+        #Bachega April/05/2026
+        if electronegativity is None:
+            self.electronegativity = self._init_electronegativity()
+        else:
+            self.electronegativity = electronegativity           
         
         self.color_id = None
         self.occupancy = occupancy
@@ -252,13 +258,24 @@ class Atom:
             vdw = ATOM_TYPES[self.symbol][6]
         return vdw
     
+    def _init_electronegativity(self):
+        """ Function doc """
+        ATOM_TYPES = self.vm_session.periodic_table.elements_by_symbol
+        try:
+            en_UFF = ATOM_TYPES[self.name][8]
+        except KeyError:
+            en_UFF = ATOM_TYPES[self.symbol][8]
+        return en_UFF
+    
     def _init_cov_rad(self):
         """ Function doc """
         ATOM_TYPES = self.vm_session.periodic_table.elements_by_symbol
         try:
-            cov = ATOM_TYPES[self.name][5]
+            #cov = ATOM_TYPES[self.name][5]
+            cov = ATOM_TYPES[self.name][7]
         except KeyError:
-            cov = ATOM_TYPES[self.symbol][5]
+            #cov = ATOM_TYPES[self.symbol][5]
+            cov = ATOM_TYPES[self.symbol][7]
         return cov
     
     def _init_ball_rad(self):

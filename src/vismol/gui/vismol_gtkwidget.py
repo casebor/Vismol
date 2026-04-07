@@ -25,12 +25,16 @@
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
+from gi.repository import GdkPixbuf
+
 from logging import getLogger
 from vismol.libgl.vismol_glcore import VismolGLCore
 from vismol.gui.filechooser import FileChooser
-
 logger = getLogger(__name__)
 
+from OpenGL.GL import *
+import numpy as np
+from PIL import Image, ImageFilter, ImageOps
 
 class VismolGTKWidget(Gtk.GLArea):
     """ Object that contains the GLArea from GTK3+.
@@ -202,6 +206,7 @@ class VismolGTKWidget(Gtk.GLArea):
         """ Function doc """
         self.vm_session.forward_frame()
         self.queue_draw()
+
     def _released_Right(self):
         """ Function doc """
         pass
@@ -450,3 +455,67 @@ class VismolGTKWidget(Gtk.GLArea):
                     pass
             glMenu.append(mitem)
     
+    def save_image(self, filename):
+        self.make_current()
+
+        if self.get_error() is not None:
+            print("Erro no contexto OpenGL")
+            return
+
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+
+        # Ler pixels
+        #glReadBuffer(GL_BACK)
+        
+        data = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
+
+        # Converter para numpy
+        image = np.frombuffer(data, dtype=np.uint8)
+        image = image.reshape((height, width, 4))
+
+        # Inverter verticalmente (OpenGL -> imagem)
+        image = np.flip(image, axis=0)
+
+        # Criar Pixbuf
+        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+            image.tobytes(),
+            GdkPixbuf.Colorspace.RGB,
+            True,
+            8,
+            width,
+            height,
+            width * 4
+        )
+
+
+        img = Image.fromarray(image)
+        #img = img.filter(ImageFilter.GaussianBlur(1))
+        
+        #img.filter(ImageFilter.EDGE_ENHANCE)
+        img.filter(ImageFilter.EDGE_ENHANCE_MORE)
+        
+        img.save("saida.png")
+        
+        #              efeito cartoon
+        # 1. suavizar
+        smooth = img.filter(ImageFilter.GaussianBlur(0.2))
+        # 2. reduzir cores
+        quant = smooth.quantize(colors=32).convert("RGB")
+        # 3. detectar bordas
+        edges = img.convert("L").filter(ImageFilter.FIND_EDGES)
+        edges = ImageOps.invert(edges)
+        # 4. combinar
+        cartoon = Image.blend(quant, edges.convert("RGB"), 0.8)
+        cartoon.save("cartoon.png")
+        
+        
+        
+        
+        #img.save("saida.png")
+        
+        
+        ## Salvar PNG
+        #pixbuf.savev(filename, "png", [], [])
+        #
+        #print(f"Imagem salva em {filename}")

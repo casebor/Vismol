@@ -138,7 +138,7 @@ class VismolSession(Config):
         if show_molecule:
             vismol_object.create_representation(rep_type="lines")
             vismol_object.create_representation(rep_type="nonbonded")
-            #vismol_object.create_representation(rep_type="cartoon")
+            #vismol_object.create_representation(rep_type="dash")
             #vismol_object.create_representation(rep_type="surface")
 
             # If autocenter is True, center the view on the mass center of the vismol_object.
@@ -358,7 +358,12 @@ class VismolSession(Config):
             selection_dict[atom.atom_id] = atom
             vobject = atom.vm_object
         
+        #tolerance = self.vm_config.gl_parameters["dynamic_bond_tolerance"]
         tolerance = self.vm_config.gl_parameters['bond_tolerance']
+        
+        #tolerance = 1.05
+        #tolerance = 1.2
+        
         vobject.dynamic_bonds = []
         for frame in range(len(vobject.frames)):            
             bonds = vobject.find_bonded_and_nonbonded_atoms(selection=selection_dict, 

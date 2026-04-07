@@ -72,6 +72,7 @@ class VismolConfig:
                               "gridsize": 0.8,
                               "maxbond": 2.4,
                               "bond_tolerance": 1.4,
+                              #"dynamic_bond_tolerance": 2.0,
                               "picking_dots_color": [0.0, 1.0, 1.0],
                               "picking_dots_safe"          : True,
                               "pk_label_color"             : [1.0, 1.0, 1.0, 1.0],

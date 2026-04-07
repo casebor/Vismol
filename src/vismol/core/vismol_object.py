@@ -129,7 +129,10 @@ class VismolObject:
         self.cov_radii_array = None  # a list of covalent radius values for all  --> will be used to calculate de bonds
                                      # List of covalent radius values for all atoms (not yet defined in the code)
         
+        self.electronegativity_array = None # a list Electronegativity from UFF force field
+                                            # see ../utils/elements.py , colunm 8 - En_UFF
           
+        
         self.topology = {} # {92: [93, 99], 93: [92, 94, 96, 100], 99: [92],...}
                            # important to define molecules
         
@@ -385,7 +388,7 @@ class VismolObject:
             return index_bonds
     
     def find_bonded_and_nonbonded_atoms(self, selection=None, frame=0, gridsize=1.2,
-                                         maxbond=2.4, tolerance=1.4, internal = True, debug = False):
+                                         maxbond=2.4, tolerance=1.2, internal = True, debug = False):
         """
         Function doc: Determines bonded and nonbonded atoms based on selection in a VismolObject.
         
@@ -442,10 +445,14 @@ class VismolObject:
         initial = time.time()
         atoms_frame_mask = np.zeros(len(self.atoms), bool)
         if self.cov_radii_array is None:
+            
             self.cov_radii_array = np.empty(len(self.atoms), dtype=np.float32)
+            self.electronegativity_array = np.empty(len(self.atoms), dtype=np.float32)
+            
             for i, atom in self.atoms.items():
                 self.cov_radii_array[i] = atom.cov_rad
-        
+                self.electronegativity_array[i] = atom.electronegativity
+                
         # Create a mask to identify atoms in the frame (all atoms if selection is None)
         if selection is None:
             selection = self.atoms
@@ -543,7 +550,6 @@ class VismolObject:
             self.cov_radii_array = np.empty(len(self.atoms), dtype=np.float32)
             for i, atom in self.atoms.items():
                 self.cov_radii_array[i] = atom.cov_rad
-
 
     def _bonds_from_pair_of_indexes_list(self, exclude_list = [['H','H']]):
         """ 

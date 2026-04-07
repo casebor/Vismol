@@ -1940,3 +1940,7 @@ class VismolGLCore:
     def queue_draw(self):
         """ Function doc """
         self.parent_widget.queue_draw()
+
+
+
+
