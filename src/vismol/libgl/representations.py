@@ -83,10 +83,18 @@ class Representation:
         """ Function doc """
         logger.debug("building '{}' representation VAO and VBOs".format(self.name))
         self.vao = self._make_gl_vao()
-        self.ind_vbo = self._make_gl_index_buffer(self.indexes)
+        GL.glUseProgram(self.shader_program)
+        GL.glBindVertexArray(self.vao)   #<- ESSENCIAL
+
+        self.ind_vbo   = self._make_gl_index_buffer(self.indexes)
         self.coord_vbo = self._make_gl_coord_buffer(self.vm_object.frames[0], self.shader_program)
-        self.col_vbo = self._make_gl_color_buffer(self.vm_object.colors, self.shader_program)
-    
+        self.col_vbo   = self._make_gl_color_buffer(self.vm_object.colors   , self.shader_program)
+        
+        #print(self.vm_object.bond_order_list, type(self.vm_object.bond_order_list))
+        if self.name == 'lines':
+            self.order_vbo = self._make_gl_bond_order_buffer(self.vm_object.bond_order_list, self.shader_program)
+        GL.glBindVertexArray(0)  # opcional, mas recomendado
+
     def _make_gl_sel_representation_vao_and_vbos(self):
         """ Function doc """
         logger.debug("building '{}' background selection VAO and VBOs".format(self.name))
@@ -141,6 +149,24 @@ class Representation:
         if instances:
             GL.glVertexAttribDivisor(att_rads, 1)
         return rad_vbo
+    
+    def _make_gl_bond_order_buffer(self, bond_order, program, instances=False):
+        """ Function doc """
+        order_vbo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, order_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, bond_order.nbytes, bond_order, GL.GL_STATIC_DRAW)
+        att_orders = GL.glGetAttribLocation(program, "vert_bond_order")
+        print(">>> vert_bond_order location:", att_orders)
+        print(">>> program:", program)
+        if att_orders == -1:
+            print("ERRO: atributo NÃO encontrado no shader")
+            return order_vbo
+        #att_orders = GL.glGetAttribLocation(program, "vert_bond_order")
+        GL.glEnableVertexAttribArray(att_orders)
+        GL.glVertexAttribPointer(att_orders, 1, GL.GL_FLOAT, GL.GL_FALSE, bond_order.itemsize, ctypes.c_void_p(0))
+        if instances:
+            GL.glVertexAttribDivisor(att_orders, 1)
+        return order_vbo
     
     def _make_gl_instance_buffer(self, instances, program):
         """ Function doc """
@@ -222,8 +248,9 @@ class Representation:
     def define_new_indexes_to_vbo(self, input_indexes):
         """ Function doc """
         self.indexes = np.array(input_indexes, dtype=np.uint32)
+        #print(self.indexes)
         self.elements = np.uint32(self.indexes.shape[0])
-
+        #print(self.elements)
 
 class PickingDotsRepresentation(Representation):
     """ Class doc """
@@ -383,7 +410,6 @@ class LinesRepresentation(Representation):
         self.vm_glcore.load_fog(self.shader_program)
         GL.glBindVertexArray(self.vao)
         #print(self.vm_object.cov_radii_array)
-        
         #'''simples bonds  or multiple bonds'''
         #if self.ratio_vbo == None:
         #    try:

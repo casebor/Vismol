@@ -123,6 +123,8 @@ class VismolObject:
         self.index_bonds = None # Pair of atoms, something like: [1, 3, 1, 17, 3, 4, 4, 20]
                                 # Pair of atoms used to define bonds (set as None if not provided)
         
+        self.bond_order_list = None  # A bond order list [1,1,1,2,1,1, and so on...]
+        
         self.non_bonded_atoms = None # Array of indexes
                                      # Array of indexes for non-bonded atoms (not yet defined in the code)
                                      
@@ -562,7 +564,7 @@ class VismolObject:
         """
         assert self.bonds is None # Ensure the bonds list is not already initialized
         self.bonds = [] # Initialize an empty list to store the Bond objects
-        
+        self.bond_order_list =[] # Initialize an empty list to store the Bond orders
         new_index_bonds = []
         # Loop through the self.index_bonds list in pairs
         for i in range(0, len(self.index_bonds)-1, 2):
@@ -592,6 +594,11 @@ class VismolObject:
                 bond = Bond(atom_i=self.atoms[index_i], atom_index_i=index_i,
                             atom_j=self.atoms[index_j], atom_index_j=index_j)
                 
+                
+                bond.get_bond_order()
+                self.bond_order_list.append(bond.bond_order)
+                
+                
                 # Add the created Bond object to the bonds list
                 self.bonds.append(bond)
                 
@@ -599,11 +606,12 @@ class VismolObject:
                 self.atoms[index_i].bonds.append(bond)
                 self.atoms[index_j].bonds.append(bond)
         
-         # Convert the index_bonds list to a numpy array of unsigned 32-bit integers
+        # Convert the index_bonds list to a numpy array of unsigned 32-bit integers
         self.index_bonds = new_index_bonds
         #print(self.index_bonds)
-        self.index_bonds = np.array(self.index_bonds, dtype=np.uint32)
-    
+        self.index_bonds     = np.array(self.index_bonds, dtype=np.uint32)
+        self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
+        #self.bond_order_list = np.repeat(self.bond_order_list, 2)
     def _get_non_bonded_from_bonded_list(self):
         """ Function doc """
         assert self.non_bonded_atoms is None

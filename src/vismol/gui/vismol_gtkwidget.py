@@ -489,9 +489,12 @@ class VismolGTKWidget(Gtk.GLArea):
         )
 
 
-        img = Image.fromarray(image)
+        #img = Image.fromarray(image)
         #img = img.filter(ImageFilter.GaussianBlur(1))
+        open_preview(image)
         
+        
+        '''
         #img.filter(ImageFilter.EDGE_ENHANCE)
         img.filter(ImageFilter.EDGE_ENHANCE_MORE)
         
@@ -519,3 +522,119 @@ class VismolGTKWidget(Gtk.GLArea):
         #pixbuf.savev(filename, "png", [], [])
         #
         #print(f"Imagem salva em {filename}")
+        '''
+
+
+
+class PreviewWindow(Gtk.Window):
+    def __init__(self, image_array):
+        super().__init__(title="Preview Cartoon")
+
+        self.set_default_size(600, 400)
+
+        # imagem original (PIL)
+        self.original = Image.fromarray(image_array)
+
+        # preview reduzido (25%)
+        self.preview_base = self.original.resize(
+            (self.original.width // 4, self.original.height // 4)
+        )
+
+        # layout principal
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.add(box)
+
+        # imagem preview
+        self.image_widget = Gtk.Image()
+        box.pack_start(self.image_widget, True, True, 0)
+
+        # painel de controles
+        controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.pack_start(controls, False, False, 0)
+
+        # sliders
+        self.blur = self.create_slider("Blur", 0.0, 5.0, 1.0, controls)
+        self.colors = self.create_slider("Cores", 2, 64, 32, controls)
+        self.edge = self.create_slider("Borda", 0, 255, 100, controls)
+        self.blend = self.create_slider("Blend", 0.0, 1.0, 0.3, controls)
+
+        # botão salvar
+        btn = Gtk.Button(label="Salvar imagem final")
+        btn.connect("clicked", self.on_save)
+        controls.pack_start(btn, False, False, 0)
+
+        # atualizar preview inicial
+        self.update_preview()
+
+    def create_slider(self, label, minv, maxv, default, parent):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        parent.pack_start(box, False, False, 0)
+
+        lbl = Gtk.Label(label=label)
+        box.pack_start(lbl, False, False, 0)
+
+        adj = Gtk.Adjustment(default, minv, maxv, 0.1, 1, 0)
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+        scale.connect("value-changed", self.on_change)
+        box.pack_start(scale, False, False, 0)
+
+        return scale
+
+    def process_image(self, img):
+        blur = self.blur.get_value()
+        colors = int(self.colors.get_value())
+        edge_th = int(self.edge.get_value())
+        blend_val = self.blend.get_value()
+
+        # 1. suavizar
+        smooth = img.filter(ImageFilter.GaussianBlur(blur))
+
+        # 2. reduzir cores
+        quant = smooth.quantize(colors=colors).convert("RGB")
+
+        # 3. bordas
+        edges = img.convert("L").filter(ImageFilter.FIND_EDGES)
+        edges = ImageOps.invert(edges)
+        edges = edges.point(lambda x: 0 if x < edge_th else 255)
+
+        # 4. combinar
+        cartoon = Image.blend(quant, edges.convert("RGB"), blend_val)
+
+        return cartoon
+
+    def update_preview(self):
+        img = self.process_image(self.preview_base)
+
+        data = np.array(img)
+        height, width, _ = data.shape
+
+        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+            data.tobytes(),
+            GdkPixbuf.Colorspace.RGB,
+            False,
+            8,
+            width,
+            height,
+            width * 3
+        )
+
+        self.image_widget.set_from_pixbuf(pixbuf)
+
+    def on_change(self, widget):
+        self.update_preview()
+
+    def on_save(self, widget):
+        final = self.process_image(self.original)
+        final.save("cartoon_final.png")
+        print("Imagem salva!")
+
+
+
+# ---- USO ----
+def open_preview(image_array):
+    win = PreviewWindow(image_array)
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+

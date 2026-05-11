@@ -2,127 +2,57 @@
 # -*- coding: utf-8 -*-
 #
 
+
 vertex_shader_lines   = """
-#version 330
-precision highp float;
-precision highp int;
+#version 330 core
 
 uniform mat4 model_mat;
 uniform mat4 view_mat;
 
+//layout (location = 0) in vec3 vert_coord;
+//layout (location = 1) in vec3 vert_color;
+//layout (location = 2) in float vert_dot_size;
+//layout (location = 3) in float vert_bond_order;
 in vec3 vert_coord;
 in vec3 vert_color;
-in float vert_dot_size;  // new:   van der Waals radii
+in float vert_dot_size;
+in int vert_bond_order;
 
 out vec3 geom_color;
 out vec4 geom_coord;
-out float geom_radius; // send to geometry shader
+out float geom_radius;
+out int geom_bond_order;
 
 void main() {
-    // Transformação para coordenadas da câmera (view space)
     vec4 world_pos = model_mat * vec4(vert_coord, 1.0);
-    geom_coord = view_mat * world_pos;
-    geom_color = vert_color;
+    vec4 view_pos  = view_mat * world_pos;
+
+    // saída para o geometry shader
+    geom_coord  = view_pos;
+    geom_color  = vert_color;
     geom_radius = vert_dot_size;
+    geom_bond_order = vert_bond_order;
+    //obrigatório no core profile
+    //gl_Position = view_pos + vec4(vert_bond_order * 0.0);
+    gl_Position = view_pos;
 }
 """
-geometry_shader_lines_bad = """
+
+geometry_shader_lines = """
 #version 330 core
 
 layout (lines) in;
-layout (triangle_strip, max_vertices = 4) out;
-
-uniform mat4 proj_mat;
-uniform mat4 view_mat;
-
-in vec4 geom_coord[];
-in vec3 geom_color[];
-in float geom_radius[];
-
-out vec2 frag_uv;
-out vec3 frag_color;
-out vec3 frag_viewdir;
-
-void main() {
-    vec3 p0 = geom_coord[0].xyz;
-    vec3 p1 = geom_coord[1].xyz;
-
-    // Direção da ligação
-    vec3 bond_dir = normalize(p1 - p0);
-    // Vetor ortogonal para expandir o quad (tela)
-    vec3 view_dir = normalize(vec3(inverse(view_mat)[3]) - p0);
-    vec3 ortho = normalize(cross(bond_dir, view_dir));
-    
-    float radius = 0.5 * (geom_radius[0] + geom_radius[1]) * 0.5;
-
-    vec3 offset = ortho * radius;
-
-    vec4 pos0 = vec4(p0 + offset, 1.0);
-    vec4 pos1 = vec4(p0 - offset, 1.0);
-    vec4 pos2 = vec4(p1 + offset, 1.0);
-    vec4 pos3 = vec4(p1 - offset, 1.0);
-
-    frag_color = geom_color[0];
-    frag_uv = vec2(0.0, 0.0); frag_viewdir = view_dir;
-    gl_Position = proj_mat * view_mat * pos0; EmitVertex();
-
-    frag_uv = vec2(0.0, 1.0);
-    gl_Position = proj_mat * view_mat * pos1; EmitVertex();
-
-    frag_color = geom_color[1];
-    frag_uv = vec2(1.0, 0.0);
-    gl_Position = proj_mat * view_mat * pos2; EmitVertex();
-
-    frag_uv = vec2(1.0, 1.0);
-    gl_Position = proj_mat * view_mat * pos3; EmitVertex();
-
-    EndPrimitive();
-}
-
-"""
-fragment_shader_lines_bad = """
-#version 330 core
-
-in vec2 frag_uv;
-in vec3 frag_color;
-in vec3 frag_viewdir;
-
-out vec4 out_color;
-
-void main() {
-    float x = frag_uv.x * 2.0 - 1.0;  // -1 to 1
-    float y = frag_uv.y * 2.0 - 1.0;
-
-    float dist_sq = x*x;
-    if (dist_sq > 1.0) discard;  // fora do cilindro
-
-    // Simula iluminação difusa em torno do cilindro
-    vec3 normal = vec3(x, 0.0, sqrt(1.0 - dist_sq));
-    vec3 light_dir = normalize(vec3(0.3, 0.5, 1.0));  // direcional
-    float diffuse = max(dot(normal, light_dir), 0.0);
-
-    vec3 color = frag_color * (0.3 + 0.7 * diffuse);
-    out_color = vec4(color, 1.0);
-}
-
-"""
-
-
-geometry_shader_lines  = """
-#version 330
-precision highp float;
-precision highp int;
-
-layout (lines) in;
-layout (line_strip, max_vertices = 8) out;  // Corrigido: máximo de 8 vértices emitidos
+layout (line_strip, max_vertices = 8) out;
 
 uniform mat4 proj_mat;
 uniform mat4 view_mat;     // Adicionado
+
 const float separation = 0.06;
 
 in vec3 geom_color[];
 in vec4 geom_coord[];
 in float geom_radius[];
+in int geom_bond_order[];
 
 out vec3 frag_color;
 out vec4 frag_coord;
@@ -134,21 +64,19 @@ vec4 get_vec(vec3 point_A, vec3 point_B, vec3 campos){
     return vec4(tmp, 0.0);
 }
 
+
 void main() {
     float r0 = geom_radius[0];
     float r1 = geom_radius[1];
-    float sum_radius = (r0 + r1)*0.87;
-    
-    //sum_radius = sum_radius;
-    
-    
+
     vec4 p0 = geom_coord[0];
     vec4 p1 = geom_coord[1];
-    //float dist = length(p1.xyz - p0.xyz);
-    float dist = sum_radius+1;
-    
-    
-    if (dist < sum_radius) {
+
+    vec4 mid = vec4((p0.xyz + p1.xyz) * 0.5, 1.0);
+    float bond_order = geom_bond_order[0+1];
+    //float bond_order =
+    if (bond_order > 10) {
+
         vec4 mid_coord = vec4((p0.xyz + p1.xyz) * 0.5, 1.0);
         vec3 campos = vec3(inverse(view_mat)[3]);  // Corrigido: pegando posição da câmera
         vec3 vort = get_vec(p0.xyz, p1.xyz, campos).xyz;  // Corrigido: extrair vec3 do vec4
@@ -199,39 +127,36 @@ void main() {
         
         EmitVertex();
         EndPrimitive();
-    
-    } else {
-        vec4 mid = vec4((p0.xyz + p1.xyz) * 0.5, 1.0);
-        vec3 c0 = geom_color[0];
-        vec3 c1 = geom_color[1];
 
-        frag_color = c0;
-        frag_coord = p0;
+    } else {
+
         gl_Position = proj_mat * p0;
+        frag_color = geom_color[0];
+        frag_coord = p0;
         EmitVertex();
 
-        frag_coord = mid;
         gl_Position = proj_mat * mid;
+        frag_color = geom_color[0];
+        frag_coord = mid;
         EmitVertex();
         EndPrimitive();
 
-        frag_color = c1;
-        frag_coord = mid;
         gl_Position = proj_mat * mid;
+        frag_color = geom_color[1];
+        frag_coord = mid;
         EmitVertex();
 
-        frag_coord = p1;
         gl_Position = proj_mat * p1;
-        //frag_color = vec3(geom_radius[0], 0.0, 0.0); // apagar depois
+        frag_color = geom_color[1];
+        frag_coord = p1;
         EmitVertex();
         EndPrimitive();
     }
 }
 """
-fragment_shader_lines  = """
+
+fragment_shader_lines = """
 #version 330 core
-precision highp float;
-precision highp int;
 
 uniform vec4 fog_color;
 uniform float fog_start;
@@ -243,18 +168,136 @@ in vec4 frag_coord;
 out vec4 final_color;
 
 void main() {
-    float dist = abs(frag_coord.z); // ou length(frag_coord.xyz), se preferir
+    float dist = abs(frag_coord.z);
 
-    // Cálculo do fator de névoa linear
     float fog_factor = 1.0;
     if (dist >= fog_start) {
         fog_factor = clamp((fog_end - dist) / (fog_end - fog_start), 0.0, 1.0);
     }
 
-    // Interpolação linear entre a cor da névoa e a cor do fragmento
     final_color = mix(fog_color, vec4(frag_color, 1.0), fog_factor);
+    //final_color = vec4(0.0, 1.0, 1.0, 1.0);
+    
 }
 """
+
+
+
+
+
+geometry_shader_lines_new  = """
+#version 330
+
+layout (lines) in;
+layout (triangle_strip, max_vertices = 4) out;
+
+uniform mat4 proj_mat;
+uniform mat4 view_mat;
+uniform vec3 camera_pos;
+
+in vec3 geom_color[];
+in vec4 geom_coord[];
+in float geom_radius[];
+
+out vec3 frag_color;
+out vec3 frag_pos;
+out vec3 frag_axis;
+out float frag_radius;
+
+void main() {
+    vec3 p0 = geom_coord[0].xyz;
+    vec3 p1 = geom_coord[1].xyz;
+
+    float radius = (geom_radius[0] + geom_radius[1]) * 0.5;
+
+    vec3 axis = normalize(p1 - p0);
+    vec3 view_dir = normalize(camera_pos - p0);
+
+    // vetor perpendicular (base do billboard)
+    vec3 right = normalize(cross(axis, view_dir)) * radius;
+
+    vec3 v0 = p0 - right;
+    vec3 v1 = p0 + right;
+    vec3 v2 = p1 - right;
+    vec3 v3 = p1 + right;
+
+    frag_axis = axis;
+    frag_radius = radius;
+
+    // tri strip
+    frag_color = geom_color[0];
+    frag_pos = v0;
+    gl_Position = proj_mat * view_mat * vec4(v0, 1.0);
+    EmitVertex();
+
+    frag_pos = v1;
+    gl_Position = proj_mat * view_mat * vec4(v1, 1.0);
+    EmitVertex();
+
+    frag_color = geom_color[1];
+    frag_pos = v2;
+    gl_Position = proj_mat * view_mat * vec4(v2, 1.0);
+    EmitVertex();
+
+    frag_pos = v3;
+    gl_Position = proj_mat * view_mat * vec4(v3, 1.0);
+    EmitVertex();
+
+    EndPrimitive();
+}"""
+
+fragment_shader_lines_new  = """
+#version 330
+
+in vec3 frag_color;
+in vec3 frag_pos;
+in vec3 frag_axis;
+in float frag_radius;
+
+uniform vec3 camera_pos;
+
+out vec4 out_color;
+
+void main() {
+    // vetor da câmera até o fragmento
+    vec3 view_dir = normalize(frag_pos - camera_pos);
+
+    // projetar ponto no eixo do cilindro
+    vec3 axis = normalize(frag_axis);
+
+    vec3 to_frag = frag_pos;
+
+    float proj = dot(to_frag, axis);
+    vec3 closest = proj * axis;
+
+    vec3 radial = to_frag - closest;
+    float dist = length(radial);
+
+    if (dist > frag_radius) discard;
+
+    // normal do cilindro
+    vec3 normal = normalize(radial);
+
+    // iluminação simples (Phong)
+    vec3 light_dir = normalize(vec3(1.0, 1.0, 1.0));
+
+    float diff = max(dot(normal, light_dir), 0.0);
+    float spec = pow(max(dot(reflect(-light_dir, normal), -view_dir), 0.0), 32.0);
+
+    vec3 color = frag_color * (0.2 + 0.8 * diff) + vec3(1.0) * spec * 0.5;
+
+    out_color = vec4(color, 1.0);
+}"""
+
+
+
+
+
+
+
+
+
+
 
 
 

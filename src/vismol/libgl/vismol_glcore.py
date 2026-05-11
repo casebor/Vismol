@@ -1567,6 +1567,7 @@ class VismolGLCore:
     def _compile_shader_lines(self):
         """ Function doc """
         line_type = self.vm_config.gl_parameters["line_type"]
+        line_type = 0
         self.shader_programs["lines"] = self.load_shaders(shaders_lines.shader_type[line_type]["vertex_shader"],
                                                   shaders_lines.shader_type[line_type]["fragment_shader"],
                                                   shaders_lines.shader_type[line_type]["geometry_shader"])

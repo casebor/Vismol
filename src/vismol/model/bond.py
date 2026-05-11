@@ -23,7 +23,7 @@
 #  
 
 import numpy as np
-
+import math
 
 class Bond:
     """ Class doc """
@@ -48,6 +48,95 @@ class Bond:
         self.bond_order = bond_order
         self.line_active = True
         self.stick_active = False
+    
+        self.bond_reference = None
+
+
+    def get_bond_order(self):
+        """Determina a ordem de ligação com base na distância."""
+        
+        if self.bond_reference is None:
+            self.get_bond_reference()
+        
+        dist = self.distance()
+        
+        # ordenar por comprimento (menor = maior ordem)
+        refs = sorted(self.bond_reference.items(), key=lambda x: x[1])
+        
+        self.bond_order = 1  # default
+        
+        for order, ref_dist in refs:
+            if dist <= ref_dist:
+                self.bond_order = order
+                break
+
+        print(self.atom_i.name, self.atom_j.name, dist, self.bond_order, self.bond_reference[self.bond_order])
+        
+        
+        
+        
+    def get_bond_reference(self):
+        """
+        Calcula comprimentos de ligação r_ij para diferentes ordens
+        usando o modelo do UFF.
+        """
+        if self.bond_reference is None:
+            _lambda = 0.1332
+
+            ri = self.atom_i.cov_rad
+            rj = self.atom_j.cov_rad
+
+            Xi = self.atom_i.electronegativity
+            Xj = self.atom_j.electronegativity
+
+            self.bond_reference = {}
+
+            bond_orders = [1, 1.5, 2, 3]
+
+            for n in bond_orders:
+                rBO = -_lambda * (ri + rj) * math.log(n)
+
+                rEN = (ri * rj * (math.sqrt(Xi) - math.sqrt(Xj))**2) / (Xi * ri + Xj * rj)
+
+                r_ij = ri + rj + rBO + rEN
+
+                self.bond_reference[n] = r_ij
+        
+
+        
+        #print ( self.atom_i.name ) 
+        #print ( self.atom_j.name )
+        #print ( self.bond_reference)
+        #print ( self.distance ( ))
+        #if 
+        
+        #return self.bond_reference
+
+    #def get_r_BO (self):
+    #    """ Function doc 
+    #    
+    #    Xi, Xj eletronegatividades (escala de Eletronegatividade de Pauling - do UFF)
+    #    
+    #    r_ij =r_i + r_j + rBO +rEN
+    #    
+    #    """
+    #    
+    #    _lambda = 0.1332
+    #    
+    #    ri = self.atom_i.cov_rad
+    #    rj​ = self.atom_j.cov_rad
+    #    
+    #    Xi = self.atom_i.electronegativity
+    #    Xj = self.atom_j.electronegativity
+    #    
+    #    for n in range(1, 4):
+    #       
+    #        rBO ​= −_lambda(ri​ + rj​) * math.log(n)
+    #        rEN = ri​*rj​*(math.sqrt(Xi) - math.sqrt(Xj))**2 / (Xi*ri​ + Xj*rj)
+    #        r_ij =ri + rj + rBO +rEN
+    #        self.bond_reference[n] = r_ij
+    #    print(self.bond_reference)
+    
     
     def distance (self, frame=0):
         """ Function doc """
