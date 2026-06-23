@@ -83,18 +83,10 @@ class Representation:
         """ Function doc """
         logger.debug("building '{}' representation VAO and VBOs".format(self.name))
         self.vao = self._make_gl_vao()
-        GL.glUseProgram(self.shader_program)
-        GL.glBindVertexArray(self.vao)   #<- ESSENCIAL
-
-        self.ind_vbo   = self._make_gl_index_buffer(self.indexes)
+        self.ind_vbo = self._make_gl_index_buffer(self.indexes)
         self.coord_vbo = self._make_gl_coord_buffer(self.vm_object.frames[0], self.shader_program)
-        self.col_vbo   = self._make_gl_color_buffer(self.vm_object.colors   , self.shader_program)
-        
-        #print(self.vm_object.bond_order_list, type(self.vm_object.bond_order_list))
-        if self.name == 'lines':
-            self.order_vbo = self._make_gl_bond_order_buffer(self.vm_object.bond_order_list, self.shader_program)
-        GL.glBindVertexArray(0)  # opcional, mas recomendado
-
+        self.col_vbo = self._make_gl_color_buffer(self.vm_object.colors, self.shader_program)
+    
     def _make_gl_sel_representation_vao_and_vbos(self):
         """ Function doc """
         logger.debug("building '{}' background selection VAO and VBOs".format(self.name))
@@ -149,24 +141,6 @@ class Representation:
         if instances:
             GL.glVertexAttribDivisor(att_rads, 1)
         return rad_vbo
-    
-    def _make_gl_bond_order_buffer(self, bond_order, program, instances=False):
-        """ Function doc """
-        order_vbo = GL.glGenBuffers(1)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, order_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, bond_order.nbytes, bond_order, GL.GL_STATIC_DRAW)
-        att_orders = GL.glGetAttribLocation(program, "vert_bond_order")
-        print(">>> vert_bond_order location:", att_orders)
-        print(">>> program:", program)
-        if att_orders == -1:
-            print("ERRO: atributo NÃO encontrado no shader")
-            return order_vbo
-        #att_orders = GL.glGetAttribLocation(program, "vert_bond_order")
-        GL.glEnableVertexAttribArray(att_orders)
-        GL.glVertexAttribPointer(att_orders, 1, GL.GL_FLOAT, GL.GL_FALSE, bond_order.itemsize, ctypes.c_void_p(0))
-        if instances:
-            GL.glVertexAttribDivisor(att_orders, 1)
-        return order_vbo
     
     def _make_gl_instance_buffer(self, instances, program):
         """ Function doc """
@@ -248,9 +222,8 @@ class Representation:
     def define_new_indexes_to_vbo(self, input_indexes):
         """ Function doc """
         self.indexes = np.array(input_indexes, dtype=np.uint32)
-        #print(self.indexes)
         self.elements = np.uint32(self.indexes.shape[0])
-        #print(self.elements)
+
 
 class PickingDotsRepresentation(Representation):
     """ Class doc """
@@ -289,7 +262,7 @@ class PickingDotsRepresentation(Representation):
         pixel size value directly to the shader code.
         '''
         GL.glUseProgram(self.shader_program)
-        custom_int_location = GL.glGetUniformLocation(self.shader_program, "_size")
+        custom_int_location = self.vm_glcore._get_uniform_location(self.shader_program, "_size")
         if custom_int_location != -1:
             GL.glUniform1i(custom_int_location, int(_size))  # Set the integer value to  _size
         else:
@@ -410,6 +383,7 @@ class LinesRepresentation(Representation):
         self.vm_glcore.load_fog(self.shader_program)
         GL.glBindVertexArray(self.vao)
         #print(self.vm_object.cov_radii_array)
+        
         #'''simples bonds  or multiple bonds'''
         #if self.ratio_vbo == None:
         #    try:
@@ -551,7 +525,7 @@ class SticksRepresentation(Representation):
 
     def _load_camera_pos(self, program):
         xyz_coords = self.vm_glcore.glcamera.get_modelview_position(self.vm_object.model_mat)
-        u_campos = GL.glGetUniformLocation(program, "u_campos")
+        u_campos = self.vm_glcore._get_uniform_location(program, "u_campos")
         GL.glUniform3fv(u_campos, 1, xyz_coords)
     
     def draw_representation(self):
@@ -568,7 +542,7 @@ class SticksRepresentation(Representation):
         GL.glBindVertexArray(self.vao)
         
         #radius = self.vm_session.vm_config.gl_parameters["sticks_radius"]
-        custom_int_location = GL.glGetUniformLocation(self.shader_program, "vert_rad")
+        custom_int_location = self.vm_glcore._get_uniform_location(self.shader_program, "vert_rad")
         GL.glUniform1f(custom_int_location, self.radius)  # Set the integer value to  _size
         
         
@@ -612,7 +586,7 @@ class SticksRepresentation(Representation):
         GL.glBindVertexArray(self.sel_vao)
         
         #radius = self.vm_session.vm_config.gl_parameters["sticks_radius"]
-        custom_int_location = GL.glGetUniformLocation(self.sel_shader_program, "vert_rad")
+        custom_int_location = self.vm_glcore._get_uniform_location(self.sel_shader_program, "vert_rad")
         GL.glUniform1f(custom_int_location, self.radius)
         
         
@@ -692,31 +666,54 @@ class SpheresRepresentation(Representation):
         self.sel_insta_vbo = self._make_gl_instance_buffer(np.zeros(3, dtype=np.float32), self.shader_program)
     
     def _coords_colors_rads(self):
-        coords, colors, rads = [], [], []
+        """ Builds the per-instance coords/colors/rads arrays for the
+            non-selection (normal view) spheres VBOs.
+
+            coords change every frame during animation/trajectory playback
+            or interactive geometry edits (dihedral rotation, dragging,
+            etc). colors and rads only change when the selection (which
+            atoms are shown) or the color scheme changes - they do NOT
+            depend on the current frame. Splitting them avoids rebuilding
+            colors/rads (and the underlying Python-level loop) on every
+            single animation frame.
+        """
         frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
-        for i in self.indexes:
-            coords.append(frame[i])
-            colors.append(self.vm_object.atoms[i].color)
-            if self.mode == 2 or self.mode == 3:
-                rads.append(self.rad)
-            else:
-                rads.append(self.vm_object.atoms[i].ball_rad)
-        coords = np.array(coords, dtype=np.float32)
-        colors = np.array(colors, dtype=np.float32)
-        rads = np.array(rads, dtype=np.float32)
-        return coords, colors, rads
-    
+        coords = np.ascontiguousarray(frame[self.indexes], dtype=np.float32)
+        return coords
+
+    def _colors_rads(self):
+        """ Builds the per-instance colors/rads arrays. Vectorized via
+            numpy fancy indexing into the object-level color array instead
+            of a per-atom Python loop. ball_rad has no object-level array
+            (it can be overridden per-atom, e.g. for picking highlights),
+            so it still needs a comprehension, but this only runs when the
+            atom selection/coloring changes - not on every frame.
+        """
+        if self.mode == 2 or self.mode == 3:
+            colors = self.vm_object.colors[self.indexes]
+            rads = np.full(len(self.indexes), self.rad, dtype=np.float32)
+        else:
+            colors = self.vm_object.colors[self.indexes]
+            rads = np.fromiter(
+                (self.vm_object.atoms[i].ball_rad for i in self.indexes),
+                dtype=np.float32, count=len(self.indexes))
+        return colors, rads
+
     def _sel_coords_colors_rads(self):
-        coords, colors, rads = [], [], []
+        """ Same split as _coords_colors_rads/_colors_rads but for the
+            background-selection (picking) VBOs, which use color_indexes
+            instead of colors.
+        """
         frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
-        for i in self.indexes:
-            coords.append(frame[i])
-            colors.append(self.vm_object.atoms[i].color_id)
-            rads.append(self.vm_object.atoms[i].ball_rad)
-        coords = np.array(coords, dtype=np.float32)
-        colors = np.array(colors, dtype=np.float32)
-        rads = np.array(rads, dtype=np.float32)
-        return coords, colors, rads
+        coords = np.ascontiguousarray(frame[self.indexes], dtype=np.float32)
+        return coords
+
+    def _sel_colors_rads(self):
+        colors = self.vm_object.color_indexes[self.indexes]
+        rads = np.fromiter(
+            (self.vm_object.atoms[i].ball_rad for i in self.indexes),
+            dtype=np.float32, count=len(self.indexes))
+        return colors, rads
     
     def draw_representation(self):
         """ Function doc """
@@ -732,14 +729,22 @@ class SpheresRepresentation(Representation):
         self.vm_glcore.load_fog(self.shader_program)
         GL.glBindVertexArray(self.vao)
         
-        if self.was_rep_coord_modified or self.was_rep_ind_modified:
-            coords, colors, rads = self._coords_colors_rads()
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.insta_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.nbytes, coords, GL.GL_STATIC_DRAW)
+        # colors/rads only depend on which atoms are shown and their color
+        # scheme, not on the current frame, so they're only rebuilt when
+        # the index/selection or coloring actually changed.
+        if self.was_rep_ind_modified or self.was_col_modified:
+            colors, rads = self._colors_rads()
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.col_vbo)
             GL.glBufferData(GL.GL_ARRAY_BUFFER, colors.nbytes, colors, GL.GL_STATIC_DRAW)
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.rad_vbo)
             GL.glBufferData(GL.GL_ARRAY_BUFFER, rads.nbytes, rads, GL.GL_STATIC_DRAW)
+            self.elements = np.uint32(len(self.indexes))
+            self.was_col_modified = False
+        
+        if self.was_rep_coord_modified or self.was_rep_ind_modified:
+            coords = self._coords_colors_rads()
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.insta_vbo)
+            GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.nbytes, coords, GL.GL_DYNAMIC_DRAW)
             self.elements = np.uint32(coords.shape[0])
             self.was_rep_coord_modified = False
             self.was_rep_ind_modified = False
@@ -765,14 +770,18 @@ class SpheresRepresentation(Representation):
         self.vm_glcore.load_matrices(self.sel_shader_program, self.vm_object.model_mat)
         GL.glBindVertexArray(self.sel_vao)
         
-        if self.was_sel_coord_modified or self.was_sel_ind_modified:
-            coords, colors, rads = self._sel_coords_colors_rads()
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sel_insta_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.nbytes, coords, GL.GL_STATIC_DRAW)
+        if self.was_sel_ind_modified:
+            colors, rads = self._sel_colors_rads()
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sel_col_vbo)
             GL.glBufferData(GL.GL_ARRAY_BUFFER, colors.nbytes, colors, GL.GL_STATIC_DRAW)
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sel_rad_vbo)
             GL.glBufferData(GL.GL_ARRAY_BUFFER, rads.nbytes, rads, GL.GL_STATIC_DRAW)
+            self.elements = np.uint32(len(self.indexes))
+        
+        if self.was_sel_coord_modified or self.was_sel_ind_modified:
+            coords = self._sel_coords_colors_rads()
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sel_insta_vbo)
+            GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.nbytes, coords, GL.GL_DYNAMIC_DRAW)
             self.elements = np.uint32(coords.shape[0])
             self.was_sel_coord_modified = False
             self.was_sel_ind_modified = False
@@ -807,7 +816,7 @@ class DashedLinesRepresentation(Representation):
         
         # How to pass data to shader on the fly. It's not the most 
         # efficient mode, but it's an okay solution in this case.
-        color = GL.glGetUniformLocation(self.shader_program, "uniform_color")
+        color = self.vm_glcore._get_uniform_location(self.shader_program, "uniform_color")
         #GL.glUniformMatrix4fv(proj, 1, GL.GL_FALSE, self.glcamera.projection_matrix)
         color2 = np.array(self.color2, dtype=np.float32)
         GL.glUniform3fv(color, 1, color2)
@@ -902,7 +911,7 @@ class ImpostorRepresentation(Representation):
     
     def _load_camera_pos(self, program):
         xyz_coords = self.vm_glcore.glcamera.get_modelview_position(self.vm_object.model_mat)
-        u_campos = GL.glGetUniformLocation(program, "u_campos")
+        u_campos = self.vm_glcore._get_uniform_location(program, "u_campos")
         GL.glUniform3fv(u_campos, 1, xyz_coords)
     
     def draw_representation(self):

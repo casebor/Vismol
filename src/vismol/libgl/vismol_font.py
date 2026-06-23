@@ -127,11 +127,25 @@ class VismolFont():
         self.text_vbo = text_vbo
         self.coord_vbo = coord_vbo
     
+    def _get_uniform_location(self, program, name):
+        """ Cached wrapper around glGetUniformLocation. Uniform locations
+            don't change once a program is linked, so we look each one up
+            once per (program, name) pair instead of every frame.
+        """
+        if not hasattr(self, "_uniform_loc_cache"):
+            self._uniform_loc_cache = {}
+        key = (program, name)
+        loc = self._uniform_loc_cache.get(key)
+        if loc is None:
+            loc = GL.glGetUniformLocation(program, name)
+            self._uniform_loc_cache[key] = loc
+        return loc
+    
     def load_matrices(self, program, view_mat, proj_mat):
         """ Function doc """
-        view = GL.glGetUniformLocation(program, "view_mat")
+        view = self._get_uniform_location(program, "view_mat")
         GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, view_mat)
-        proj = GL.glGetUniformLocation(program, "proj_mat")
+        proj = self._get_uniform_location(program, "proj_mat")
         GL.glUniformMatrix4fv(proj, 1, GL.GL_FALSE, proj_mat)
     
     def load_font_params(self, program):
@@ -139,9 +153,9 @@ class VismolFont():
             offset coordinates (X,Y) to calculate the quad and the color of
             the font.
         """
-        offset = GL.glGetUniformLocation(program, "offset")
+        offset = self._get_uniform_location(program, "offset")
         GL.glUniform2fv(offset, 1, self.offset)
-        color = GL.glGetUniformLocation(program, "text_color")
+        color = self._get_uniform_location(program, "text_color")
         GL.glUniform4fv(color, 1, self.color)
         return True
     

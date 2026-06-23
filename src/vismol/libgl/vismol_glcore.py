@@ -68,6 +68,12 @@ class VismolGLCore:
         self.core_shader_programs = {}
         self.representations_available = self.vm_config.representations_available
         self.sphere_selection = None
+        # Cache for glGetUniformLocation results, keyed by (program, name).
+        # Uniform locations are fixed once a program is linked, so looking
+        # them up by string every frame (the previous behaviour) is wasted
+        # driver/CPU work. This cache is invalidated whenever shaders are
+        # (re)compiled - see create_gl_programs().
+        self._uniform_loc_cache = {}
         
         
     def initialize(self):
@@ -785,6 +791,9 @@ class VismolGLCore:
         logger.info("OpenGL version: {}".format(GL.glGetString(GL.GL_VERSION)))
         logger.info("OpenGL major version: {}".format(GL.glGetDoublev(GL.GL_MAJOR_VERSION)))
         logger.info("OpenGL minor version: {}".format(GL.glGetDoublev(GL.GL_MINOR_VERSION)))
+        # Programs are about to be (re)linked, so any previously cached
+        # uniform locations are no longer valid.
+        self._uniform_loc_cache.clear()
         self._compile_shader_picking_dots()
         self._compile_shader_freetype()
         for rep in self.representations_available:
@@ -1171,6 +1180,22 @@ class VismolGLCore:
         self.picking = False
         return True
     
+    def _get_uniform_location(self, program, name):
+        """ Cached wrapper around glGetUniformLocation.
+
+            glGetUniformLocation does a string lookup against the linked
+            program every time it is called. Locations don't change once a
+            program is linked, so we look each one up once and reuse it for
+            the lifetime of the program (cache is cleared in
+            create_gl_programs when shaders are recompiled).
+        """
+        key = (program, name)
+        loc = self._uniform_loc_cache.get(key)
+        if loc is None:
+            loc = GL.glGetUniformLocation(program, name)
+            self._uniform_loc_cache[key] = loc
+        return loc
+
     def load_fog(self, program):
         """ Load the fog parameters in the specified program
             
@@ -1180,11 +1205,11 @@ class VismolGLCore:
                        and greater than fog_start)
             fog_color -- The color for the fog (same as background)
         """
-        fog_s = GL.glGetUniformLocation(program, "fog_start")
+        fog_s = self._get_uniform_location(program, "fog_start")
         GL.glUniform1fv(fog_s, 1, self.glcamera.fog_start)
-        fog_e = GL.glGetUniformLocation(program, "fog_end")
+        fog_e = self._get_uniform_location(program, "fog_end")
         GL.glUniform1fv(fog_e, 1, self.glcamera.fog_end)
-        fog_c = GL.glGetUniformLocation(program, "fog_color")
+        fog_c = self._get_uniform_location(program, "fog_color")
         GL.glUniform4fv(fog_c, 1, self.bckgrnd_color)
     
     def load_matrices(self, program=None, model_mat=None):
@@ -1194,13 +1219,11 @@ class VismolGLCore:
             view_mat -- transformation matrix for the camera used
             proj_mat -- matrix for the space to be visualized in the scene
         """
-        
-        # it is not necessary get the location everytime - change it later pls!
-        model = GL.glGetUniformLocation(program, "model_mat")
+        model = self._get_uniform_location(program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, model_mat)
-        view = GL.glGetUniformLocation(program, "view_mat")
+        view = self._get_uniform_location(program, "view_mat")
         GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.glcamera.view_matrix)
-        proj = GL.glGetUniformLocation(program, "proj_mat")
+        proj = self._get_uniform_location(program, "proj_mat")
         GL.glUniformMatrix4fv(proj, 1, GL.GL_FALSE, self.glcamera.projection_matrix)
 
     def load_dot_params(self, program):
@@ -1218,30 +1241,30 @@ class VismolGLCore:
         dot_factor = np.float32(500 / abs(self.dist_cam_zrp))
         if dot_factor > 150.0:
             dot_factor = 150.0
-        uni_vext_linewidth = GL.glGetUniformLocation(program, "vert_ext_linewidth")
+        uni_vext_linewidth = self._get_uniform_location(program, "vert_ext_linewidth")
         GL.glUniform1fv(uni_vext_linewidth, 1, linewidth)
-        uni_vint_antialias = GL.glGetUniformLocation(program, "vert_int_antialias")
+        uni_vint_antialias = self._get_uniform_location(program, "vert_int_antialias")
         GL.glUniform1fv(uni_vint_antialias, 1, antialias)
-        uni_dot_size = GL.glGetUniformLocation(program, "vert_dot_factor")
+        uni_dot_size = self._get_uniform_location(program, "vert_dot_factor")
         GL.glUniform1fv(uni_dot_size, 1, dot_factor)
     
     def load_lights(self, program):
         """ Function doc
         """
-        light_pos = GL.glGetUniformLocation(program, "my_light.position")
+        light_pos = self._get_uniform_location(program, "my_light.position")
         GL.glUniform3fv(light_pos, 1, self.light_position)
-        amb_coef = GL.glGetUniformLocation(program, "my_light.ambient_coef")
+        amb_coef = self._get_uniform_location(program, "my_light.ambient_coef")
         GL.glUniform1fv(amb_coef, 1, self.light_ambient_coef)
-        shiny = GL.glGetUniformLocation(program, "my_light.shininess")
+        shiny = self._get_uniform_location(program, "my_light.shininess")
         GL.glUniform1fv(shiny, 1, self.light_shininess)
-        intensity = GL.glGetUniformLocation(program, "my_light.intensity")
+        intensity = self._get_uniform_location(program, "my_light.intensity")
         GL.glUniform3fv(intensity, 1, self.light_intensity)
     
     def load_antialias_params(self, program):
         """ Function doc """
-        a_length = GL.glGetUniformLocation(program, "antialias_length")
+        a_length = self._get_uniform_location(program, "antialias_length")
         GL.glUniform1fv(a_length, 1, 0.05)
-        bck_col = GL.glGetUniformLocation(program, "alias_color")
+        bck_col = self._get_uniform_location(program, "alias_color")
         GL.glUniform3fv(bck_col, 1, self.bckgrnd_color[:3])
     
     def _draw_labels(self):
@@ -1567,7 +1590,6 @@ class VismolGLCore:
     def _compile_shader_lines(self):
         """ Function doc """
         line_type = self.vm_config.gl_parameters["line_type"]
-        line_type = 0
         self.shader_programs["lines"] = self.load_shaders(shaders_lines.shader_type[line_type]["vertex_shader"],
                                                   shaders_lines.shader_type[line_type]["fragment_shader"],
                                                   shaders_lines.shader_type[line_type]["geometry_shader"])
@@ -1941,7 +1963,3 @@ class VismolGLCore:
     def queue_draw(self):
         """ Function doc """
         self.parent_widget.queue_draw()
-
-
-
-

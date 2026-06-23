@@ -395,25 +395,39 @@ void main()
         
         return vao
     
+    def _get_uniform_location(self, program, name):
+        """ Cached wrapper around glGetUniformLocation. Uniform locations
+            don't change once a program is linked, so we look each one up
+            once per (program, name) pair instead of every frame.
+        """
+        if not hasattr(self, "_uniform_loc_cache"):
+            self._uniform_loc_cache = {}
+        key = (program, name)
+        loc = self._uniform_loc_cache.get(key)
+        if loc is None:
+            loc = GL.glGetUniformLocation(program, name)
+            self._uniform_loc_cache[key] = loc
+        return loc
+    
     def load_params(self):
         """ This function load the model matrix of the gizmo, the camera
             position and the light parameters in the cones OpenGL program.
         """
         #view = GL.glGetUniformLocation(self.gizmo_axis_program, "view_mat")
         #GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.vm_glcore.glcamera.view_matrix)
-        model = GL.glGetUniformLocation(self.gizmo_axis_program, "model_mat")
+        model = self._get_uniform_location(self.gizmo_axis_program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, self.model_mat)
-        light_pos = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.position")
+        light_pos = self._get_uniform_location(self.gizmo_axis_program, "my_light.position")
         GL.glUniform3fv(light_pos, 1, self.light_position)
-        light_col = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.color")
+        light_col = self._get_uniform_location(self.gizmo_axis_program, "my_light.color")
         GL.glUniform3fv(light_col, 1, self.light_color)
-        amb_coef = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.ambient_coef")
+        amb_coef = self._get_uniform_location(self.gizmo_axis_program, "my_light.ambient_coef")
         GL.glUniform1fv(amb_coef, 1, self.light_ambient_coef)
-        spec_coef = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.specular_coef")
+        spec_coef = self._get_uniform_location(self.gizmo_axis_program, "my_light.specular_coef")
         GL.glUniform1fv(spec_coef, 1, self.light_specular_coef)
-        shiny = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.shininess")
+        shiny = self._get_uniform_location(self.gizmo_axis_program, "my_light.shininess")
         GL.glUniform1fv(shiny, 1, self.light_shininess)
-        intensity = GL.glGetUniformLocation(self.gizmo_axis_program, "my_light.intensity")
+        intensity = self._get_uniform_location(self.gizmo_axis_program, "my_light.intensity")
         GL.glUniform3fv(intensity, 1, self.light_intensity)
         return True
     
@@ -424,7 +438,7 @@ void main()
         #print (self.vm_glcore.glcamera.view_matrix)
         #view = GL.glGetUniformLocation(self.gl_lines_program, "view_mat")
         #GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.vm_glcore.glcamera.view_matrix)
-        model = GL.glGetUniformLocation(self.gl_lines_program, "model_mat")
+        model = self._get_uniform_location(self.gl_lines_program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, self.model_mat)
         return True
     
