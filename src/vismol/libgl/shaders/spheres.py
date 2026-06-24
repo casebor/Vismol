@@ -6,9 +6,12 @@
 vertex_shader_spheres = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -93,9 +96,12 @@ void main(){
 sel_vertex_shader_spheres = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;

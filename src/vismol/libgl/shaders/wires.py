@@ -7,8 +7,11 @@ vertex_shader_wires = """
 precision highp float; 
 precision highp int;
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -29,7 +32,10 @@ precision highp int;
 layout (triangles) in;
 layout (line_strip, max_vertices = 3) out;
 
-uniform mat4 proj_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 
 in vec3 geom_color[];
 in vec4 geom_coord[];

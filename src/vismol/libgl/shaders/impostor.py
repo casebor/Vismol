@@ -3,12 +3,15 @@
 #
 
 
-vertex_shader_glumpy  = """
+vertex_shader_glumpy = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 uniform vec3 u_campos;
 
@@ -37,6 +40,11 @@ void main (void){
 fragment_shader_glumpy = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 struct Light {
    vec3 position;
    //vec3 color;
@@ -49,8 +57,6 @@ struct Light {
 uniform Light my_light;
 
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 uniform vec4 fog_color;
 uniform float fog_start;
@@ -137,9 +143,12 @@ void main(){
 sel_fragment_shader_glumpy = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 frag_color;       // varying vec3 v_color;
 in float f_radius;        // varying float v_radius;
@@ -171,11 +180,14 @@ void main()
 
 vertex_shader_impostor = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 precision highp float;
 
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -204,12 +216,15 @@ void main() {
 geometry_shader_impostor = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (points) in;
 layout (triangle_strip, max_vertices = 18) out;
 
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 geom_color[];
 in vec3 geom_coord[];
@@ -378,6 +393,11 @@ void main(){
 
 fragment_shader_impostor = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 #extension GL_EXT_frag_depth: enable
 precision highp float;
 
@@ -392,7 +412,6 @@ struct Light {
 
 uniform Light my_light;
 
-uniform mat4 proj_mat;
 //uniform float u_depth;
 
 uniform vec4 fog_color;

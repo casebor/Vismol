@@ -6,8 +6,11 @@
 vertex_shader_lines   = """
 #version 330 core
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 //layout (location = 0) in vec3 vert_coord;
 //layout (location = 1) in vec3 vert_color;
@@ -41,11 +44,13 @@ void main() {
 geometry_shader_lines = """
 #version 330 core
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (lines) in;
 layout (line_strip, max_vertices = 8) out;
-
-uniform mat4 proj_mat;
-uniform mat4 view_mat;     // Adicionado
 
 const float separation = 0.06;
 
@@ -308,8 +313,11 @@ sel_vertex_shader_lines = """
 precision highp float; 
 precision highp int;
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -327,10 +335,13 @@ sel_geometry_shader_lines = """
 precision highp float; 
 precision highp int;
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (lines) in;
 layout (line_strip, max_vertices = 4) out;
-
-uniform mat4 proj_mat;
 
 in vec3 geom_color[];
 in vec4 geom_coord[];

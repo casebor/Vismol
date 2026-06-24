@@ -25,9 +25,12 @@
 vertex_shader_dot_simple = """
 # version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -79,9 +82,12 @@ void main(){
 vertex_shader_dot_circle = """
 # version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -140,9 +146,12 @@ void main(){
 vertex_shader_dot_disc = """
 # version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -204,9 +213,12 @@ void main(){
 vertex_shader_dot_extra = """
 # version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -222,7 +234,11 @@ void main(){
 
 fragment_shader_dot_extra = """
 # version 330
-uniform mat4 proj_mat;
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 
 in vec4 frag_coord;
 in vec3 frag_color;

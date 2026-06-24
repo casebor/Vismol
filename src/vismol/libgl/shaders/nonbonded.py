@@ -24,9 +24,11 @@ const float xyz_offset = 0.3;
 layout (points) in;
 layout (line_strip, max_vertices = 6) out;
 
-uniform mat4 proj_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 
 in vec3 geom_color[];
@@ -126,9 +128,11 @@ const float xyz_offset = 0.3;
 layout (points) in;
 layout (line_strip, max_vertices = 6) out;
 
-uniform mat4 proj_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 
 in vec3 geom_color[];

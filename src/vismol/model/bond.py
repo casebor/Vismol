@@ -65,12 +65,12 @@ class Bond:
         
         self.bond_order = 1  # default
         
-        for order, ref_dist in refs:
-            if dist <= ref_dist:
-                self.bond_order = order
-                break
+        #for order, ref_dist in refs:
+        #    if dist <= ref_dist:
+        #        self.bond_order = order
+        #        break
 
-        print(self.atom_i.name, self.atom_j.name, dist, self.bond_order, self.bond_reference[self.bond_order])
+        #print(self.atom_i.name, self.atom_j.name, dist, self.bond_order, self.bond_reference[self.bond_order])
         
         
         

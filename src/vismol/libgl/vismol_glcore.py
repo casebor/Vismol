@@ -74,6 +74,18 @@ class VismolGLCore:
         # driver/CPU work. This cache is invalidated whenever shaders are
         # (re)compiled - see create_gl_programs().
         self._uniform_loc_cache = {}
+        # --- Medidor de frame-time (Gargalo: instrumentacao) ---------------
+        # Leve e opcional. Quando self.show_fps == True, render() acumula o
+        # tempo de cada frame e imprime FPS medio + ms/frame a cada
+        # self._fps_report_every frames. Default desligado: nenhum custo alem
+        # de um 'if' por frame quando False. Para medir, basta setar
+        # glcore.show_fps = True em runtime (ou aqui). Totalmente reversivel.
+        self.show_fps = False
+        self._fps_report_every = 60      # reporta a cada N frames
+        self._fps_frame_count = 0        # frames desde o ultimo report
+        self._fps_accum_time = 0.0       # tempo acumulado (s) desde o report
+        self._fps_last_t = None          # timestamp do frame anterior
+        # -------------------------------------------------------------------
         
         
     def initialize(self):
@@ -85,6 +97,20 @@ class VismolGLCore:
                          program will be changed change this value to True
         """
         self.model_mat = np.identity(4, dtype=np.float32) # Not sure if this is used :S
+        # --- UBO de matrizes de camera (Gargalo 2) -------------------------
+        # view_mat e proj_mat sao IGUAIS para todos os objetos do frame, mas
+        # antes eram re-enviados por objeto via glUniformMatrix4fv (2 uploads
+        # x N objetos por frame). Agora vivem num Uniform Buffer Object unico,
+        # atualizado 1x por frame e compartilhado por todos os shaders via o
+        # binding point CAMERA_UBO_BINDING. model_mat segue como uniform
+        # por-objeto (muda por objeto, nao entra aqui).
+        # Layout std140: dois mat4 contiguos = 2 * 64 = 128 bytes.
+        #   offset   0: mat4 view_mat
+        #   offset  64: mat4 proj_mat
+        self.CAMERA_UBO_BINDING = 0          # binding point fixo
+        self._camera_ubo = None              # id do buffer GL (lazy init)
+        self._camera_ubo_size = 128          # 2 mat4 float32
+        # -------------------------------------------------------------------
         self.zero_reference_point = np.zeros(3, dtype=np.float32)
         self.glcamera = GLCamera(self.vm_config.gl_parameters["field_of_view"],
                                  self.width / self.height,
@@ -619,6 +645,12 @@ class VismolGLCore:
         """ This is the function that will be called everytime the window
             needs to be re-drawed.
         """
+        # Medidor opcional: marca o inicio do corpo do render. Mede o custo
+        # de CPU+submissao GL deste frame (nao inclui o tempo ocioso entre
+        # frames), que e exatamente o numero relevante para avaliar se o
+        # refactor de UBO (Gargalo 2) compensa.
+        if self.show_fps:
+            _t_start = time.perf_counter()
         if self.shader_flag:
             self.create_gl_programs()
             self.selection_box.initialize_gl()
@@ -634,6 +666,9 @@ class VismolGLCore:
         GL.glClearColor(self.bckgrnd_color[0], self.bckgrnd_color[1],
                         self.bckgrnd_color[2], self.bckgrnd_color[3])
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        # Atualiza view/proj no UBO uma unica vez por frame (Gargalo 2).
+        # Todos os shaders convertidos leem deste buffer compartilhado.
+        self.update_camera_ubo()
         
         if self.updated_coords:
             for vm_object in self.vm_session.vm_objects_dic.values():
@@ -717,9 +752,24 @@ class VismolGLCore:
                 # Here are represented the blue dots referring to the atom's selections
                 if vm_object.core_representations["picking_dots"] is None:
                     vm_object.build_core_representations()
-                vm_object.core_representations["picking_dots"].was_rep_ind_modified = True
-                vm_object.core_representations["picking_dots"].define_new_indexes_to_vbo(list(vm_object.selected_atom_ids))
-                vm_object.core_representations["picking_dots"].draw_representation()
+                pdots = vm_object.core_representations["picking_dots"]
+                # Gargalo 1: a reconstrucao da lista de indices + re-upload do
+                # VBO so precisa acontecer quando o conjunto de atomos
+                # selecionados muda. Antes isso era feito INCONDICIONALMENTE
+                # a cada frame (rebuild de lista Python, np.array novo e
+                # glBufferData), desperdicando trabalho durante rotacao/zoom
+                # com a selecao parada. Comparamos com um snapshot do ultimo
+                # conjunto subido; so re-subimos no diff. O draw continua
+                # todo frame, pois a cena e redesenhada normalmente.
+                sel_ids = vm_object.selected_atom_ids
+                if pdots._last_uploaded_sel_ids != sel_ids:
+                    pdots.was_rep_ind_modified = True
+                    pdots.define_new_indexes_to_vbo(list(sel_ids))
+                    # snapshot por copia: selected_atom_ids e mutado in-place
+                    # (add/discard/clear), entao guardar a referencia nao
+                    # detectaria mudancas. set(...) congela o estado atual.
+                    pdots._last_uploaded_sel_ids = set(sel_ids)
+                pdots.draw_representation()
         
         if not self.vm_session.picking_selection_mode and self.show_selection_box and self.shift:
             if self.selection_box.vao is None:
@@ -730,6 +780,26 @@ class VismolGLCore:
         if self.show_axis:
             self.axis._draw(True)
             self.axis._draw(False)
+
+        # Fecha o cronometro do frame e reporta periodicamente. Medimos so o
+        # tempo de CPU/submissao (sem glFinish, que serializaria a GPU e
+        # distorceria o numero). 'ms/frame' aqui = custo da thread Python por
+        # render; e o indicador para decidir sobre o UBO. O 'FPS' derivado e
+        # o teto teorico se o render fosse o unico limite.
+        if self.show_fps:
+            dt = time.perf_counter() - _t_start
+            self._fps_accum_time += dt
+            self._fps_frame_count += 1
+            if self._fps_frame_count >= self._fps_report_every:
+                avg_s = self._fps_accum_time / self._fps_frame_count
+                avg_ms = avg_s * 1000.0
+                fps = (1.0 / avg_s) if avg_s > 0 else float("inf")
+                n_obj = len(self.vm_session.vm_objects_dic)
+                print("[FPS] {:.1f} fps | {:.3f} ms/render | {} objetos | "
+                      "media de {} frames".format(fps, avg_ms, n_obj,
+                                                   self._fps_frame_count))
+                self._fps_frame_count = 0
+                self._fps_accum_time = 0.0
         return True
     
     def render_to_image(self, scale_factor=1):
@@ -986,6 +1056,9 @@ class VismolGLCore:
         if geometry is not None:
             GL.glAttachShader(program, my_geometry_shader)
         GL.glLinkProgram(program)
+        # Liga o bloco de camera (se o shader o declara) ao binding point
+        # compartilhado. No-op para shaders ainda nao convertidos.
+        self._bind_camera_ubo_to_program(program)
         return program
     
     def create_shader(self, shader_prog, shader_type):
@@ -1375,19 +1448,77 @@ class VismolGLCore:
         fog_c = self._get_uniform_location(program, "fog_color")
         GL.glUniform4fv(fog_c, 1, self.bckgrnd_color)
     
+    def _ensure_camera_ubo(self):
+        """ Cria o UBO de camera uma unica vez (lazy). Idempotente: chamadas
+            seguintes apos a criacao nao fazem nada. Seguro chamar dentro do
+            contexto GL (ex.: inicio de render). """
+        if self._camera_ubo is not None:
+            return
+        self._camera_ubo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_UNIFORM_BUFFER, self._camera_ubo)
+        # Aloca o buffer vazio (DYNAMIC: atualizado todo frame)
+        GL.glBufferData(GL.GL_UNIFORM_BUFFER, self._camera_ubo_size, None,
+                        GL.GL_DYNAMIC_DRAW)
+        # Liga o buffer inteiro ao binding point compartilhado
+        GL.glBindBufferBase(GL.GL_UNIFORM_BUFFER, self.CAMERA_UBO_BINDING,
+                            self._camera_ubo)
+        GL.glBindBuffer(GL.GL_UNIFORM_BUFFER, 0)
+
+    def update_camera_ubo(self):
+        """ Sobe view_mat e proj_mat para o UBO. Chamar UMA vez por frame,
+            antes de desenhar as representacoes. Substitui os dois
+            glUniformMatrix4fv por-objeto que existiam em load_matrices. """
+        self._ensure_camera_ubo()
+        view = np.ascontiguousarray(self.glcamera.view_matrix, dtype=np.float32)
+        proj = np.ascontiguousarray(self.glcamera.projection_matrix,
+                                    dtype=np.float32)
+        GL.glBindBuffer(GL.GL_UNIFORM_BUFFER, self._camera_ubo)
+        # view em offset 0, proj em offset 64 (std140: mat4 ocupa 64 bytes)
+        GL.glBufferSubData(GL.GL_UNIFORM_BUFFER, 0,  64, view)
+        GL.glBufferSubData(GL.GL_UNIFORM_BUFFER, 64, 64, proj)
+        GL.glBindBuffer(GL.GL_UNIFORM_BUFFER, 0)
+
+    def _bind_camera_ubo_to_program(self, program):
+        """ Liga o bloco 'CameraMatrices' de um programa ao binding point
+            compartilhado. Chamar UMA vez por programa, logo apos o link.
+            Se o programa nao declara o bloco (ex.: shader ainda nao
+            convertido, ou que nao usa camera), glGetUniformBlockIndex
+            devolve GL_INVALID_INDEX e simplesmente ignoramos -- isso e o
+            que permite a convivencia com shaders nao-convertidos. """
+        block_index = GL.glGetUniformBlockIndex(program, "CameraMatrices")
+        if block_index != GL.GL_INVALID_INDEX:
+            GL.glUniformBlockBinding(program, block_index,
+                                     self.CAMERA_UBO_BINDING)
+
     def load_matrices(self, program=None, model_mat=None):
         """ Load the matrices to OpenGL.
             
             model_mat -- transformation matrix for the objects rendered
             view_mat -- transformation matrix for the camera used
             proj_mat -- matrix for the space to be visualized in the scene
+
+            NOTA (Gargalo 2): para shaders JA CONVERTIDOS ao UBO de camera,
+            view_mat e proj_mat vem do UBO (atualizado 1x/frame por
+            update_camera_ubo) e NAO sao enviados aqui. Para shaders LEGADOS
+            (ainda com 'uniform mat4 view_mat/proj_mat'), mantemos o envio
+            individual como antes -- e isso que permite converter um shader
+            de cada vez sem quebrar os demais.
+
+            A deteccao usa o cache de uniform location: se 'view_mat' existe
+            como uniform individual no programa (loc != -1), e legado.
         """
         model = self._get_uniform_location(program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, model_mat)
+        # Fallback para shaders nao convertidos: se ainda tem view_mat como
+        # uniform individual, envia view+proj como antes.
         view = self._get_uniform_location(program, "view_mat")
-        GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.glcamera.view_matrix)
-        proj = self._get_uniform_location(program, "proj_mat")
-        GL.glUniformMatrix4fv(proj, 1, GL.GL_FALSE, self.glcamera.projection_matrix)
+        if view != -1:
+            GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE,
+                                  self.glcamera.view_matrix)
+            proj = self._get_uniform_location(program, "proj_mat")
+            if proj != -1:
+                GL.glUniformMatrix4fv(proj, 1, GL.GL_FALSE,
+                                      self.glcamera.projection_matrix)
 
     def load_dot_params(self, program):
         """ Function doc

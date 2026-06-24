@@ -374,12 +374,12 @@ class VismolObject:
                     self.color_rainbow[i,:] = red, green, blue
                     green -= color_step
     
-    def define_bonds_from_external (self, index_bonds = [], internal = True):
+    def define_bonds_from_external (self, index_bonds = [], bond_orders=None, internal = True):
         """ Function doc """
         if internal is True:
             self.index_bonds = index_bonds
 
-            self._bonds_from_pair_of_indexes_list()
+            self._bonds_from_pair_of_indexes_list(external_orders=bond_orders)
             self._get_non_bonded_from_bonded_list()
             
             self._generate_topology_from_index_bonds()
@@ -553,7 +553,7 @@ class VismolObject:
             for i, atom in self.atoms.items():
                 self.cov_radii_array[i] = atom.cov_rad
 
-    def _bonds_from_pair_of_indexes_list(self, exclude_list = [['H','H']]):
+    def _bonds_from_pair_of_indexes_list_old(self, exclude_list = [['H','H']], external_orders=None ):
         """ 
         Creates Bond objects based on pairs of indexes in self.index_bonds list.
         The bonds list is populated with the created Bond objects, and each
@@ -571,7 +571,7 @@ class VismolObject:
             
             index_i = self.index_bonds[i]    # Get the first atom's index of the bond
             index_j = self.index_bonds[i+1]  # Get the second atom's index of the bond
-            
+            print(index_i, index_j)
             is_excluded = False
             
             for excluded_bond in exclude_list: 
@@ -589,13 +589,28 @@ class VismolObject:
                 #index_j = self.index_bonds[i+1]  # Get the second atom's index of the bond
                 
                 
-                
                 # Create a Bond object with the atoms and their indexes
                 bond = Bond(atom_i=self.atoms[index_i], atom_index_i=index_i,
                             atom_j=self.atoms[index_j], atom_index_j=index_j)
                 
+
+                # Define a ordem de ligação:
+                #  - se veio ordem externa, usa a posição bond_pair_idx
+                #    (Convenção B: lista já filtrada, então o k-ésimo
+                #     sobrevivente casa com external_orders[k]);
+                #  - senão, cai no palpite geométrico (UFF).
+                if external_orders is not None:
+                    #bond.bond_order = int(external_orders[bond_pair_idx])
+                    print('here')
+                    bond.bond_order = int(external_orders[i])+1
+                else:
+                    bond.get_bond_order()
                 
-                bond.get_bond_order()
+                
+                #bond.get_bond_order()       # fallback UFF
+                
+                
+                #bond.get_bond_order()
                 self.bond_order_list.append(bond.bond_order)
                 
                 
@@ -611,7 +626,109 @@ class VismolObject:
         #print(self.index_bonds)
         self.index_bonds     = np.array(self.index_bonds, dtype=np.uint32)
         self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
-        #self.bond_order_list = np.repeat(self.bond_order_list, 2)
+
+        
+        self._build_bond_order_per_atom() # bachega 2026/Jun/24
+
+
+    def _bonds_from_pair_of_indexes_list(self, exclude_list=[['H', 'H']],
+                                         external_orders=None):
+        """
+        Creates Bond objects based on pairs of indexes in self.index_bonds.
+
+        self.index_bonds = [0,1 , 0,4 , 1,3 , ...]   (achatado, pares)
+        self.bonds       = [bond1(obj), bond2(obj), ...]
+
+        external_orders (Convenção B):
+            Lista de ordens de ligação alinhada APENAS aos bonds que
+            SOBREVIVEM ao filtro de exclusão (exclude_list), na mesma ordem
+            em que eles aparecem. Ou seja, external_orders[k] é a ordem do
+            k-ésimo bond NÃO-excluído. Quem monta essa lista (ex.: o parser
+            de MOL2/SDF ou o wrapper do pDynamo) deve aplicar a MESMA regra
+            de exclusão para manter o alinhamento.
+
+            Se None, a ordem é estimada por distância (UFF) via
+            bond.get_bond_order(), preservando o comportamento antigo.
+        """
+        assert self.bonds is None  # garante que a lista ainda não foi inicializada
+        self.bonds = []            # lista de objetos Bond
+        self.bond_order_list = []  # ordem de cada bond (paralela a self.bonds)
+        new_index_bonds = []
+
+        # Contador de bonds NÃO-excluídos. Só avança quando um bond é
+        # efetivamente criado, mantendo o alinhamento com external_orders
+        # (Convenção B). Diferente de i//2, que contaria também os excluídos.
+        bond_pair_idx = 0
+
+        # Percorre self.index_bonds de 2 em 2 (cada par = um bond)
+        n = 0
+        
+        for i in range(0, len(self.index_bonds) - 1, 2):
+
+            index_i = self.index_bonds[i]      # índice do primeiro átomo
+            index_j = self.index_bonds[i + 1]  # índice do segundo átomo
+
+            # Verifica se o par está na lista de exclusão (ex.: H–H)
+            is_excluded = False
+            for excluded_bond in exclude_list:
+                if (self.atoms[index_i].symbol in excluded_bond and
+                        self.atoms[index_j].symbol in excluded_bond):
+                    is_excluded = True
+
+            if is_excluded:
+                # Bond excluído: não cria objeto, não consome posição em
+                # external_orders e NÃO incrementa bond_pair_idx.
+                pass
+            
+            else:
+                new_index_bonds.append(index_i)
+                new_index_bonds.append(index_j)
+
+                # Cria o objeto Bond com os átomos e seus índices
+                bond = Bond(atom_i=self.atoms[index_i], atom_index_i=index_i,
+                            atom_j=self.atoms[index_j], atom_index_j=index_j)
+
+                # Define a ordem de ligação:
+                #  - se veio ordem externa, usa a posição bond_pair_idx
+                #    (Convenção B: lista já filtrada, então o k-ésimo
+                #     sobrevivente casa com external_orders[k]);
+                #  - senão, cai no palpite geométrico (UFF).
+                if external_orders is not None:
+                    pass
+                    #bond.bond_order = int(external_orders[n])
+                else:
+                    #print('standard bond.get_bond_order')
+                    bond.get_bond_order()
+
+                self.bond_order_list.append(bond.bond_order)
+
+                # Avança o contador só agora, após criar um bond válido.
+                bond_pair_idx += 1
+
+                # Registra o bond na lista geral
+                self.bonds.append(bond)
+
+                # Atualiza cada átomo com o bond do qual participa
+                self.atoms[index_i].bonds.append(bond)
+                self.atoms[index_j].bonds.append(bond)
+            #n= n+2
+        # Converte para arrays numpy (uint32) usados pelos VBOs
+        self.index_bonds = new_index_bonds
+        self.index_bonds = np.array(self.index_bonds, dtype=np.uint32)
+        
+        
+        self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
+        #self.bond_order_list = np.array(external_orders, dtype=np.uint32)
+        
+        #print(self.index_bonds)
+        #print(external_orders)
+        
+        # Propaga a ordem (por aresta) para um array por átomo, alinhado
+        # com as coordenadas — é esse array que alimenta o VBO do shader.
+        self._build_bond_order_per_atom()
+
+
+
     def _get_non_bonded_from_bonded_list(self):
         """ Function doc """
         assert self.non_bonded_atoms is None
@@ -911,6 +1028,56 @@ class VismolObject:
         print('\n\n')
         #print (self.cell_colors)
 
+
+
+# ============================================================================
+#  PARTE A — src/vismol/core/vismol_object.py
+#
+#  Problema: `bond_order_list` tem UM valor por aresta (por bond), mas o
+#  atributo de shader `vert_bond_order` é POR VÉRTICE (por átomo do par).
+#  Como o desenho é por índices (GL_LINES sobre index_bonds), precisamos de
+#  um array alinhado com as COORDENADAS dos átomos.
+#
+#  A forma mais segura é construir um array `bond_order_per_atom` do tamanho
+#  do nº de átomos: para cada bond, marcamos a ordem nos dois átomos. Em
+#  caso de um átomo participar de bonds de ordens diferentes (raro em lines,
+#  mas possível), fica a MAIOR ordem — escolha visual conservadora.
+#
+#  >>> Adicionar este método à classe VismolObject e chamá-lo no final de
+#      _bonds_from_pair_of_indexes_list() (logo após montar bond_order_list).
+# ============================================================================
+
+#   no final de _bonds_from_pair_of_indexes_list(), depois de:
+#       self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
+#   acrescentar:
+#       self._build_bond_order_per_atom()
+    def _build_bond_order_per_atom(self):
+        """
+        Constrói self.bond_order_per_atom: um inteiro por átomo, alinhado com
+        self.frames[x] (mesma ordem das coordenadas). É ESSE array que vira VBO
+        e alimenta `vert_bond_order` no shader de linhas.
+
+        Regra: cada átomo recebe a maior ordem dentre os bonds em que aparece.
+        Átomos sem bond ficam com 1 (não afeta nada, pois não são desenhados
+        como linha).
+        
+        # bachega 2026/Jun/24
+        """
+        n_atoms = len(self.atoms)
+        order_per_atom = np.ones(n_atoms, dtype=np.int32)  # default = 1
+
+        # self.index_bonds = [i0, j0, i1, j1, ...]  (pares)
+        # self.bond_order_list = [ord0, ord1, ...]  (um por par)
+        for k, bond_order in enumerate(self.bond_order_list):
+            idx_i = int(self.index_bonds[2 * k])
+            idx_j = int(self.index_bonds[2 * k + 1])
+            o = int(bond_order)
+            if o > order_per_atom[idx_i]:
+                order_per_atom[idx_i] = o
+            if o > order_per_atom[idx_j]:
+                order_per_atom[idx_j] = o
+
+        self.bond_order_per_atom = order_per_atom
 
 
 

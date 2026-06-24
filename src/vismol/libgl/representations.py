@@ -53,6 +53,10 @@ class Representation:
         self.was_rep_ind_modified = False
         self.was_sel_ind_modified = False
         self.was_rep_col_modified = False
+        # Cache do ultimo conjunto de IDs de selecao enviado ao VBO de
+        # picking_dots. Evita reconstruir indices e re-subir o buffer todo
+        # frame quando a selecao nao mudou (Gargalo 1). None = nunca subiu.
+        self._last_uploaded_sel_ids = None
         # representation
         self.vao = None
         self.ind_vbo = None

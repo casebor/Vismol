@@ -3,10 +3,14 @@
 #
 vertex_shader_ribbon_stick = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 precision highp float; 
 precision highp int;
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -25,10 +29,14 @@ void main(){
 
 vertex_shader_sticks = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 precision highp float; 
 precision highp int;
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -48,12 +56,16 @@ void main(){
 
 geometry_shader_sticks = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 precision highp float; 
 precision highp int;
 layout (lines) in;
 layout (triangle_strip, max_vertices = 40) out;
 
-uniform mat4 proj_mat;
 
 in vec3 geom_color[];
 in vec4 geom_coord[];
@@ -520,11 +532,15 @@ void main(){
 
 vertex_shader_impostor_sticks = """
 #version 330
+
 precision highp float;
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -551,12 +567,15 @@ void main() {
 geometry_shader_impostor_sticks = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (lines) in;
 layout (triangle_strip, max_vertices = 18) out;
 
 uniform mat4 model_mat;
-uniform mat4 view_mat;
-uniform mat4 proj_mat;
 
 in vec3 geom_color[];
 in vec3 geom_coord[];
@@ -744,6 +763,11 @@ void main(){
 
 fragment_shader_impostor_sticks = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 #extension GL_EXT_frag_depth: enable
 precision highp float;
 
@@ -758,7 +782,6 @@ struct Light {
 
 uniform Light my_light;
 
-uniform mat4 proj_mat;
 //uniform float u_depth;
 
 uniform vec4 fog_color;
@@ -844,10 +867,14 @@ void main() {
 
 sel_fragment_shader_impostor_sticks = """
 #version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 #extension GL_EXT_frag_depth: enable
 precision highp float;
 
-uniform mat4 proj_mat;
 
 in vec3 frag_color;
 in vec3 frag_coord;
