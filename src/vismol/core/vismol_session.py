@@ -274,6 +274,13 @@ class VismolSession(Config):
                 vm_object.representations[rep_type].active = True
                 vm_object.representations[rep_type].was_rep_ind_modified = True
                 vm_object.representations[rep_type].was_sel_ind_modified = True
+                # Coordinates may be stale if this representation was
+                # inactive while the trajectory frame advanced (render()
+                # only refreshes coords for representations that are
+                # active - see vismol_glcore.py), so force a refresh now
+                # that it's visible again.
+                vm_object.representations[rep_type].was_rep_coord_modified = True
+                vm_object.representations[rep_type].was_sel_coord_modified = True
             else:
                 vm_object.representations[rep_type].active = False
                 #print('vm_object.representations[rep_type].active = False')

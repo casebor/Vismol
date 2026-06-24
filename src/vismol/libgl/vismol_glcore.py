@@ -642,8 +642,23 @@ class VismolGLCore:
                 vm_object.core_representations["picking_dots"].was_rep_coord_modified = True
                 for rep in vm_object.representations.values():
                     if rep is not None:
-                        rep.was_rep_coord_modified = True
-                        rep.was_sel_coord_modified = True
+                        # Only flag coordinates as dirty for representations
+                        # that are actually drawn. Inactive representations
+                        # (e.g. a hidden "spheres" rep) would otherwise have
+                        # their full coordinate VBO re-uploaded to the GPU
+                        # every single frame of trajectory/MD playback for
+                        # nothing, since draw_representation() never runs
+                        # for them while inactive. was_sel_coord_modified is
+                        # safe to skip here too: draw_background_sel_representation()
+                        # (which consumes that flag) is itself only called
+                        # for representations where rep.active is True - see
+                        # _selection_box_pick(). Re-activating a representation
+                        # already re-marks its indexes as modified elsewhere
+                        # (vismol_session.py), and we mark coords there too
+                        # below so a reactivated rep never draws stale coords.
+                        if rep.active:
+                            rep.was_rep_coord_modified = True
+                            rep.was_sel_coord_modified = True
                         if rep.is_dynamic:
                             rep.was_rep_ind_modified = True
                             rep.was_sel_ind_modified = True
@@ -717,6 +732,139 @@ class VismolGLCore:
             self.axis._draw(False)
         return True
     
+    def render_to_image(self, scale_factor=1):
+        """ Renders the current scene into an offscreen framebuffer at
+            scale_factor times the widget's current resolution, then
+            reads it back as a numpy RGBA array (height, width, 4) with
+            origin at the top-left (already flipped from OpenGL's
+            bottom-left convention, ready to hand to PIL/Image.fromarray).
+
+            Rationale for *rendering* at a higher resolution instead of
+            just upscaling the captured screenshot afterwards: naive
+            image upscaling only blurs/interpolates existing pixels, it
+            doesn't add detail. Rendering at scale_factor x resolution
+            actually rasterizes thinner/more precise lines, smoother
+            circles for spheres/dots, and crisper text, because the GPU
+            recomputes every fragment at the higher pixel density.
+
+            scale_factor must be uniform (same factor for width and
+            height) so the aspect ratio - and therefore the projection
+            matrix - stays exactly the same as the on-screen view; only
+            the pixel density changes. This also means dot/point sizes
+            (which several representations compute in screen pixels via
+            vm_glcore.height - see representations.py) come out scaled
+            consistently with line/stick thickness (which is computed in
+            world units via the projection matrix), instead of looking
+            disproportionately small at the higher resolution.
+
+            Keyword arguments:
+            scale_factor -- integer or float multiplier applied to both
+                            width and height (e.g. 2 for 2x, 3 for 3x).
+
+            Returns:
+            image -- np.uint8 array of shape (height*scale_factor,
+                     width*scale_factor, 4), or None if the offscreen
+                     framebuffer could not be created/completed.
+        """
+        if scale_factor == 1:
+            # No offscreen framebuffer needed - just read whatever is
+            # already in the on-screen framebuffer (caller is expected
+            # to have rendered a fresh frame into it already).
+            width = int(self.width)
+            height = int(self.height)
+            data = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            image = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 4))
+            return np.ascontiguousarray(np.flip(image, axis=0))
+
+        # --- Save every bit of state render_to_image is about to touch ---
+        orig_width  = self.width
+        orig_height = self.height
+        orig_right  = self.right
+        orig_left   = self.left
+        orig_proj_mat = np.copy(self.glcamera.projection_matrix)
+        orig_aspect   = self.glcamera.viewport_aspect_ratio
+        prev_fbo      = GL.glGetIntegerv(GL.GL_FRAMEBUFFER_BINDING)
+        prev_viewport = GL.glGetIntegerv(GL.GL_VIEWPORT)
+
+        new_width  = int(orig_width  * scale_factor)
+        new_height = int(orig_height * scale_factor)
+
+        fbo = color_tex = depth_rbo = None
+        try:
+            # --- Build the offscreen framebuffer at the higher resolution ---
+            color_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, color_tex)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, new_width, new_height,
+                             0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+
+            depth_rbo = GL.glGenRenderbuffers(1)
+            GL.glBindRenderbuffer(GL.GL_RENDERBUFFER, depth_rbo)
+            GL.glRenderbufferStorage(GL.GL_RENDERBUFFER, GL.GL_DEPTH_COMPONENT24,
+                                      new_width, new_height)
+
+            fbo = GL.glGenFramebuffers(1)
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+            GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                       GL.GL_TEXTURE_2D, color_tex, 0)
+            GL.glFramebufferRenderbuffer(GL.GL_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+                                          GL.GL_RENDERBUFFER, depth_rbo)
+
+            status = GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER)
+            if status != GL.GL_FRAMEBUFFER_COMPLETE:
+                logger.error("render_to_image: offscreen framebuffer incomplete (status=%s)", status)
+                return None
+
+            # --- Point width/height/projection at the higher resolution ---
+            # Same aspect ratio (width and height scale by the same
+            # factor), so the projection matrix comes out geometrically
+            # identical to the on-screen one - this only changes pixel
+            # density, not framing/zoom/distortion.
+            self.width  = np.float32(new_width)
+            self.height = np.float32(new_height)
+            self.right  = self.width / self.height
+            self.left   = -self.right
+            self.glcamera.viewport_aspect_ratio = self.width / self.height
+            self.glcamera.set_projection_matrix(
+                mop.my_glPerspectivef(self.glcamera.field_of_view,
+                                      self.glcamera.viewport_aspect_ratio,
+                                      self.glcamera.z_near, self.glcamera.z_far))
+
+            GL.glViewport(0, 0, new_width, new_height)
+            self.render()
+
+            data = GL.glReadPixels(0, 0, new_width, new_height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            image = np.frombuffer(data, dtype=np.uint8).reshape((new_height, new_width, 4))
+            image = np.ascontiguousarray(np.flip(image, axis=0))
+            return image
+
+        finally:
+            # --- Restore everything, even if something above raised ---
+            self.width  = orig_width
+            self.height = orig_height
+            self.right  = orig_right
+            self.left   = orig_left
+            self.glcamera.viewport_aspect_ratio = orig_aspect
+            self.glcamera.set_projection_matrix(orig_proj_mat)
+
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, prev_fbo)
+            GL.glViewport(int(prev_viewport[0]), int(prev_viewport[1]),
+                          int(prev_viewport[2]), int(prev_viewport[3]))
+
+            if fbo is not None:
+                GL.glDeleteFramebuffers(1, [fbo])
+            if color_tex is not None:
+                GL.glDeleteTextures(1, [color_tex])
+            if depth_rbo is not None:
+                GL.glDeleteRenderbuffers(1, [depth_rbo])
+
+            # The widget's own framebuffer is now the wrong size for the
+            # restored width/height until the next natural resize/render
+            # cycle - request one so the on-screen view doesn't look
+            # stretched if anything reads it before then.
+            self.queue_draw()
+    
     def _create_sphere_selection (self):
         """ Function doc """
         self.sphere_selection = VismolObject(self.vm_session, len(self.vm_session.vm_objects_dic), name='test')
@@ -741,8 +889,23 @@ class VismolGLCore:
             atom.ball_rad = 2.3 
             color = [0.0,0.0,0.2]
             atom.color = np.array(color, dtype=np.float32)
+            # unique_id and color_id (picking color) are None by default on
+            # a freshly constructed Atom - they're normally set while
+            # walking the parsed file in load_molecule(). This object is
+            # built by hand, so set them explicitly; _generate_color_vectors
+            # below needs a real atom.color_id to fill color_indexes.
+            atom.unique_id = index
+            atom._generate_atom_unique_color_id()
             self.sphere_selection.atoms[index] = atom
         
+        # Build the object-level "colors"/"color_indexes" arrays from the
+        # per-atom .color/.color_id values set above. Every normally loaded
+        # VismolObject gets these via load_molecule() -> _generate_color_vectors();
+        # this synthetic picking object skipped that step, so
+        # SpheresRepresentation._colors_rads()/_sel_colors_rads() (which index
+        # into vm_object.colors) would raise AttributeError as soon as
+        # picking_spheres tried to draw.
+        self.sphere_selection._generate_color_vectors(-1)
         
         self.sphere_selection.representations["picking_spheres"].define_new_indexes_to_vbo(range(0,4))
         self.sphere_selection.representations["picking_spheres"].active = True

@@ -55,6 +55,14 @@ class GLAxis:
         self.vm_glcore = vm_glcore
         self.aspect_ratio =  self.vm_glcore.width / self.vm_glcore.height
         a, b, c = 0.0, 0.707107, 1.0
+        #a, b, c = 0.0, 0.0, 0.0
+        # NOTE: axis_cone is intentionally left at its original -1..1
+        # scale here. _get_vao() (called once from initialize_gl(), see
+        # below) already scales these vertices down (by 0.03) and
+        # offsets them when building each axis' VAO - scaling them again
+        # here would compound into a barely-visible cone (0.03 * extra
+        # factor), which is exactly what happened when this used to
+        # multiply axis_cone by an additional GIZMO_SCALE constant.
         self.axis_cone = np.array([[ a, a,-c],[ c, a, a],[ a,-b,-b],
                                    [ a,-b,-b],[ c, a, a],[ a,-c, a],
                                    [ a,-c, a],[ c, a, a],[ a,-b, b],
@@ -84,22 +92,36 @@ class GLAxis:
                                     [-s,-p, p],[-s,-p, p],[-s,-p, p],
                                     [-s,-p, p],[-s,-p, p],[-s,-p, p],
                                     [-s,-p, p],[-s,-p, p],[-s,-p, p]], dtype=np.float32)
-        self.lines_vertices = np.array([[-0.900,-0.900, 0.000],[-0.825,-0.900, 0.000],
-                                        [-0.900,-0.900, 0.000],[-0.900,-0.825, 0.000],
-                                        [-0.900,-0.900, 0.000],[-0.900,-0.900,-0.075]], dtype=np.float32)
+        # Relative to the gizmo's own origin (0,0,0), not the corner of
+        # the screen - model_mat's translation (set below, to zrp) is
+        # what actually moves the whole gizmo to the screen corner. They
+        # used to be hardcoded near the corner directly (e.g. -0.900),
+        # which double-counted the translation once model_mat also
+        # translated to zrp, pushing the lines off-screen.
+        self.lines_vertices = np.array([[ 0.000, 0.000, 0.000],[ 0.075, 0.000, 0.000],
+                                        [ 0.000, 0.000, 0.000],[ 0.000, 0.075, 0.000],
+                                        [ 0.000, 0.000, 0.000],[ 0.000, 0.000,-0.075]], dtype=np.float32)
         self.axis_indices = np.arange(42, dtype=np.uint32)
         self.axis_colors = {"x_axis" : [1.0, 0.0, 0.0],
                             "y_axis" : [0.0, 1.0, 0.0],
                             "z_axis" : [0.0, 0.0, 1.0]}
+        #self.zrp = np.array([-0.9,-0.9, 0.0],dtype=np.float32)
+        self.zrp = np.array([-2.0,-0.9, 0.0],dtype=np.float32)
+        
+        # The gizmo's resting position is the bottom-left corner (zrp),
+        # not cam_pos (which defaults to the origin/center of the
+        # screen) - cam_pos was never actually passed a real value by
+        # any caller (see VismolGLCore.initialize(): GLAxis(vm_glcore=self)),
+        # so model_mat ended up centered on screen instead of in the
+        # corner the docstring above promises.
         self.model_mat = np.identity(4, dtype=np.float32)
-        self.model_mat[3,:3] = cam_pos
+        self.model_mat[3,:3] = self.zrp
         self.gizmo_axis_program = None
         self.gl_lines_program = None
         self.x_vao = None
         self.y_vao = None
         self.z_vao = None
         self.lines_vao = None
-        self.zrp = np.array([-0.9,-0.9, 0.0],dtype=np.float32)
         self.camera_position = np.array(cam_pos, dtype=np.float32)
         self.light_position = np.array([-0.5, 0.0,-1.0],dtype=np.float32)
         self.light_color = np.array([0.0, 0.0, 0.0, 1.0],dtype=np.float32)
@@ -112,6 +134,7 @@ class GLAxis:
 
 uniform mat4 model_mat;
 //uniform mat4 view_mat;
+uniform float aspect_ratio;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -126,7 +149,13 @@ void main(){
     frag_coord = vec3( model_mat * vec4(vert_coord, 1.0));
     frag_norm = mat3(transpose(inverse(model_mat))) * vert_norm;
     frag_color = vert_color;
-    gl_Position = vec4(frag_coord, 1.0);
+    // The gizmo is drawn directly in clip space (no projection matrix,
+    // see class docstring/_draw) so it stays flat/orthographic - but
+    // that means its NDC-space geometry is isotropic while a non-square
+    // viewport isn't, which stretches it into an ellipse on resize.
+    // Dividing X by width/height shrinks the gizmo on the wider axis
+    // instead, keeping it round/undistorted at any window size.
+    gl_Position = vec4(frag_coord.x / aspect_ratio, frag_coord.y, frag_coord.z, 1.0);
 }
 """
         self.fragment_shader_axis = """
@@ -176,6 +205,7 @@ void main() {
 #version 330
 //uniform mat4 view_mat;
 uniform mat4 model_mat;
+uniform float aspect_ratio;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -185,7 +215,11 @@ out vec3 frag_color;
 void main()
 {
     //gl_Position = (view_mat* model_mat * vec4(vert_coord, 1.0));
-    gl_Position = (model_mat * vec4(vert_coord, 1.0));
+    vec4 pos = model_mat * vec4(vert_coord, 1.0);
+    // Same aspect-ratio correction as vertex_shader_axis - see its
+    // comment for why this is needed (gizmo drawn directly in clip
+    // space, no projection matrix to absorb the viewport's aspect).
+    gl_Position = vec4(pos.x / aspect_ratio, pos.y, pos.z, pos.w);
     frag_color = vert_color;
 }
 """
@@ -316,7 +350,14 @@ void main()
         coords = np.empty([42,3], dtype=np.float32)
         normals = np.empty([42,3], dtype=np.float32)
         for i in range(self.axis_cone.shape[0]):
-            coords[i] = np.matmul(rot_mat, self.axis_cone[i]) * scale + self.zrp + offset
+            # Relative to the gizmo's own origin (0,0,0) - NOT + self.zrp.
+            # model_mat (translated to zrp, see __init__) is what moves
+            # the whole gizmo to the screen corner now; baking zrp in
+            # here too double-counts that translation once model_mat
+            # also includes it, which both mispositions the gizmo and
+            # (combined with axis_cone's own scale) shrinks the cones
+            # down to invisible.
+            coords[i] = np.matmul(rot_mat, self.axis_cone[i]) * scale + offset
             normals [i] = np.matmul(rot_mat, self.axis_norms[i])
         colors = np.tile(self.axis_colors[axis], 42).reshape(42, 3).astype(np.float32)
         
@@ -417,6 +458,12 @@ void main()
         #GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.vm_glcore.glcamera.view_matrix)
         model = self._get_uniform_location(self.gizmo_axis_program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, self.model_mat)
+        # Recomputed every frame from the live widget size, not cached -
+        # this is what makes the gizmo react immediately to a glArea
+        # resize instead of staying stretched until something else
+        # happens to refresh it.
+        aspect = self._get_uniform_location(self.gizmo_axis_program, "aspect_ratio")
+        GL.glUniform1f(aspect, self.vm_glcore.width / self.vm_glcore.height)
         light_pos = self._get_uniform_location(self.gizmo_axis_program, "my_light.position")
         GL.glUniform3fv(light_pos, 1, self.light_position)
         light_col = self._get_uniform_location(self.gizmo_axis_program, "my_light.color")
@@ -440,6 +487,8 @@ void main()
         #GL.glUniformMatrix4fv(view, 1, GL.GL_FALSE, self.vm_glcore.glcamera.view_matrix)
         model = self._get_uniform_location(self.gl_lines_program, "model_mat")
         GL.glUniformMatrix4fv(model, 1, GL.GL_FALSE, self.model_mat)
+        aspect = self._get_uniform_location(self.gl_lines_program, "aspect_ratio")
+        GL.glUniform1f(aspect, self.vm_glcore.width / self.vm_glcore.height)
         return True
     
     def _draw(self, flag):

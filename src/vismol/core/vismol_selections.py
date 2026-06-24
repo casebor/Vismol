@@ -539,7 +539,19 @@ class VismolPickingSelection:
             color = self.pk_scolor[vobj_label]
             #color = [1,1,1]
             atom.color = np.array(color, dtype=np.float32)
+            # unique_id/color_id are None by default on a freshly built Atom
+            # (normally set while walking a parsed file). This atom is
+            # built by hand, so set them explicitly.
+            atom.unique_id = 0
+            atom._generate_atom_unique_color_id()
             self.vobject_picking.atoms[0] = atom
+            # Build the object-level "colors"/"color_indexes" arrays from
+            # the atom's .color/.color_id set above. SpheresRepresentation
+            # ._colors_rads()/._sel_colors_rads() index into
+            # vm_object.colors/.color_indexes, and without this call that
+            # attribute never exists on this object - this is the exact
+            # AttributeError raised when picking_spheres tries to draw.
+            self.vobject_picking._generate_color_vectors(-1)
             self.vobject_picking.create_representation(rep_type="picking_spheres")
             #self.vobject_picking.representations["spheres"].color2 = [0,1,1]
             self.vm_session.vm_geometric_object_dic[vobj_label] = self.vobject_picking

@@ -174,15 +174,25 @@ class Representation:
     
     def _load_coord_vbo(self, coord_vbo=False, sel_coord_vbo=False):
         """ This function assigns the coordinates to 
-        be drawn by the function  draw_representation"""
+        be drawn by the function  draw_representation
+        
+        NOTE on usage hint: this path is re-executed every time the
+        coordinates change (e.g. trajectory/MD playback), unlike
+        _make_gl_coord_buffer which only runs once at VBO creation.
+        GL_DYNAMIC_DRAW tells the driver this buffer's contents are
+        updated frequently, which avoids the reallocation overhead
+        GL_STATIC_DRAW can trigger on repeated glBufferData calls to
+        the same buffer (the same byte size is reused here, so the
+        driver can update in place instead of reallocating storage).
+        """
         frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
         if coord_vbo:
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coord_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, frame.nbytes, frame, GL.GL_STATIC_DRAW)
+            GL.glBufferData(GL.GL_ARRAY_BUFFER, frame.nbytes, frame, GL.GL_DYNAMIC_DRAW)
         
         if sel_coord_vbo:
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sel_coord_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, frame.nbytes, frame, GL.GL_STATIC_DRAW)
+            GL.glBufferData(GL.GL_ARRAY_BUFFER, frame.nbytes, frame, GL.GL_DYNAMIC_DRAW)
     
     def _load_ind_vbo(self, ind_vbo=False, sel_ind_vbo=False):
         """ Function doc """
