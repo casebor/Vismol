@@ -5,7 +5,11 @@
 vertex_shader_freetype =  """
 #version 330
 
-uniform mat4 view_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 
 mat4 identityMatrix = mat4(1.0, 0.0, 0.0, 0.0,
                            0.0, 1.0, 0.0, 0.0,
@@ -28,10 +32,14 @@ void main(){
 geometry_shader_freetype = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (points) in;
 layout (triangle_strip, max_vertices = 4) out;
 
-uniform mat4 proj_mat;
 uniform vec2 offset;
 
 in vec4 geom_coord[];
@@ -175,7 +183,11 @@ void main(){
 static_vertex_shader_freetype =  """
 #version 330
 
-uniform mat4 view_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 
 mat4 identityMatrix = mat4(1.0, 0.0, 0.0, 0.0,
                            0.0, 1.0, 0.0, 0.0,
@@ -198,10 +210,14 @@ void main(){
 static_geometry_shader_freetype = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (points) in;
 layout (triangle_strip, max_vertices = 4) out;
 
-uniform mat4 proj_mat;
 uniform vec2 offset;
 
 in vec4 geom_coord[];
@@ -288,8 +304,12 @@ void main(){
 v_shader_freetype =  """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec4 vert_uv;
@@ -306,10 +326,14 @@ void main(){
 g_shader_freetype = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
 layout (points) in;
 layout (triangle_strip, max_vertices = 4) out;
 
-uniform mat4 proj_mat;
 uniform vec2 offset;
 
 in vec4 geom_coord[];

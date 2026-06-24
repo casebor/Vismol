@@ -7,8 +7,11 @@ vertex_shader_dashed_lines = """
 precision highp float; 
 precision highp int;
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 uniform vec3 uniform_color;
 //uniform int test_int;
 
@@ -63,7 +66,10 @@ precision highp int;
 layout (lines) in;
 layout (line_strip, max_vertices = 4) out;
 
-uniform mat4 proj_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 
 in vec3 geom_color[];
 in vec4 geom_coord[];
@@ -215,8 +221,11 @@ void main(){
 sel_vertex_shader_dashed_lines = """
 #version 330
 
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 uniform mat4 model_mat;
-uniform mat4 view_mat;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -235,7 +244,10 @@ sel_geometry_shader_dashed_lines = """
 layout (lines) in;
 layout (line_strip, max_vertices = 4) out;
 
-uniform mat4 proj_mat;
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
 
 in vec3 geom_color[];
 in vec4 geom_coord[];

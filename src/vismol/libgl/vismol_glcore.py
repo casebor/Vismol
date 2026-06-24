@@ -1235,6 +1235,9 @@ class VismolGLCore:
         # -------------------------------------------------
         GL.glClearColor(1, 1, 1, 1)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        # Mesma correcao do _pick: garante UBO de camera atualizado antes de
+        # desenhar a cena de selecao (shaders sel_* convertidos leem daqui).
+        self.update_camera_ubo()
         for index, vm_object in self.vm_session.vm_objects_dic.items():
             if vm_object.active:
                 #vismol_object has few different types of representations
@@ -1325,6 +1328,12 @@ class VismolGLCore:
         # Clear buffers before rendering picking scene
         GL.glClearColor(1, 1, 1, 1)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        # O picking roda ANTES do update_camera_ubo() do render() principal,
+        # entao o UBO ainda teria as matrizes do frame anterior. Os shaders
+        # sel_* ja convertidos ao UBO leem daqui, logo atualizamos agora para
+        # garantir que a cena de picking use a camera ATUAL (corrige erro de
+        # selecao logo apos rotacao/zoom).
+        self.update_camera_ubo()
 
         # Render selection representations
         for vm_object in self.vm_session.vm_objects_dic.values():
