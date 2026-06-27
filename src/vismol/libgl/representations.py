@@ -133,6 +133,24 @@ class Representation:
             GL.glVertexAttribDivisor(att_colors, 1)
         return col_vbo
     
+    def _make_gl_bond_order_buffer(self, orders, program):
+        """ Cria o VBO do atributo inteiro 'vert_bond_order' (ordem da ligacao
+            por atomo). Usa glVertexAttribIPointer porque o atributo e 'in int'
+            no shader -- glVertexAttribPointer (float) faria o driver entregar
+            valores convertidos/zerados. Se o shader nao declara o atributo
+            (att == -1), nao faz nada e retorna None (representacoes sem
+            suporte a ordem de ligacao continuam funcionando). """
+        att = GL.glGetAttribLocation(program, "vert_bond_order")
+        if att == -1:
+            return None
+        orders = np.ascontiguousarray(orders, dtype=np.int32)
+        bo_vbo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, bo_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, orders.nbytes, orders, GL.GL_STATIC_DRAW)
+        GL.glEnableVertexAttribArray(att)
+        GL.glVertexAttribIPointer(att, 1, GL.GL_INT, 0, ctypes.c_void_p(0))
+        return bo_vbo
+    
     def _make_gl_radius_buffer(self, radii, program, instances=False):
         """ Function doc """
         rad_vbo = GL.glGenBuffers(1)
@@ -536,6 +554,70 @@ class SticksRepresentation(Representation):
         """ Function doc """
         self.radius = radius
 
+    def _compute_bond_order_per_vertex(self, n_atoms):
+        """ Constroi, NA HORA, o array de ordem-de-ligacao por atomo alinhado
+            com o VBO de coordenadas (tamanho n_atoms = atomos do frame).
+
+            Faz isso aqui (no momento de montar o VBO) em vez de depender de
+            vm_object.bond_order_per_atom porque alguns caminhos de criacao do
+            objeto (define_bonds_from_external, carga de sessao do pDynamo,
+            etc.) nunca chamam _build_bond_order_per_atom, ou o constroem com
+            um numero de atomos diferente do frame desenhado. Aqui usamos
+            index_bonds + bond_order_list (que ja existem, qualquer que tenha
+            sido o caminho) e dimensionamos pelo frame, eliminando a
+            divergencia de tamanho que descartava o array.
+
+            Regra: cada atomo recebe a MAIOR ordem entre as ligacoes em que
+            aparece; indices fora do range do frame sao ignorados. Default 1.
+        """
+        orders = np.ones(n_atoms, dtype=np.int32)
+        # Flag global: se multiple_bonds estiver desligada, todas as ligacoes
+        # sao desenhadas como simples (array fica todo 1). Default True se a
+        # chave nao existir no config.
+        try:
+            _mb = self.vm_session.vm_config.gl_parameters.get("multiple_bonds", "AUSENTE")
+            print("[multiple_bonds DEBUG] valor lido =", _mb)
+            if not self.vm_session.vm_config.gl_parameters.get("multiple_bonds", True):
+                return orders
+        except Exception as _e:
+            print("[multiple_bonds DEBUG] erro ao ler flag:", _e)
+        ib = getattr(self.vm_object, "index_bonds", None)
+        bol = getattr(self.vm_object, "bond_order_list", None)
+        if ib is None or bol is None:
+            return orders
+        ib = np.asarray(ib).ravel()
+        bol = np.asarray(bol).ravel()
+        for k in range(len(bol)):
+            i = int(ib[2 * k]); j = int(ib[2 * k + 1])
+            o = int(bol[k])
+            if 0 <= i < n_atoms and o > orders[i]:
+                orders[i] = o
+            if 0 <= j < n_atoms and o > orders[j]:
+                orders[j] = o
+        return orders
+
+    def _make_gl_representation_vao_and_vbos(self):
+        """ Same as base, plus a per-atom bond-order VBO feeding the shader
+            attribute 'vert_bond_order' (used to draw double/triple bonds). """
+        super(SticksRepresentation, self)._make_gl_representation_vao_and_vbos()
+        # frames[0] tem forma (N_atomos, 3), entao o numero de atomos e shape[0].
+        n_atoms = self.vm_object.frames[0].shape[0]
+        orders = self._compute_bond_order_per_vertex(n_atoms)
+        GL.glBindVertexArray(self.vao)
+        self.bond_order_vbo = self._make_gl_bond_order_buffer(orders, self.shader_program)
+        GL.glBindVertexArray(0)
+
+    def _make_gl_sel_representation_vao_and_vbos(self):
+        """ Same as base, plus the per-atom bond-order VBO so the selection
+            geometry shader (which shares VS/GS with the draw program) also has
+            the 'vert_bond_order' attribute fed. """
+        super(SticksRepresentation, self)._make_gl_sel_representation_vao_and_vbos()
+        n_atoms = self.vm_object.frames[0].shape[0]
+        orders = self._compute_bond_order_per_vertex(n_atoms)
+        GL.glBindVertexArray(self.sel_vao)
+        self.sel_bond_order_vbo = self._make_gl_bond_order_buffer(orders, self.sel_shader_program)
+        GL.glBindVertexArray(0)
+
     def _load_camera_pos(self, program):
         xyz_coords = self.vm_glcore.glcamera.get_modelview_position(self.vm_object.model_mat)
         u_campos = self.vm_glcore._get_uniform_location(program, "u_campos")
@@ -569,15 +651,31 @@ class SticksRepresentation(Representation):
             self._load_color_vbo(None)
             self.was_col_modified = False
         
-        #GL.glDrawElements(GL.GL_LINES, int(len(self.vm_object.index_bonds)*2), GL.GL_UNSIGNED_INT, None)
+        # Ligacoes multiplas: 3 passadas. A passada 0 desenha o cilindro
+        # central/primeiro de TODAS as ligacoes; as passadas 1 e 2 desenham os
+        # cilindros laterais apenas onde a ordem (>=2, >=3) exige -- o geometry
+        # shader descarta as que nao se aplicam. Cada passada emite no maximo
+        # um cilindro por ligacao, entao max_vertices=40 e o programa sempre
+        # linka (nao estoura GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS).
+        u_pass_loc = self.vm_glcore._get_uniform_location(self.shader_program, "u_pass")
+        u_sep_loc = self.vm_glcore._get_uniform_location(self.shader_program, "u_separation")
+        if u_sep_loc != -1:
+            # Separacao entre cilindros de uma ligacao multipla. Reduzida para
+            # acompanhar os tubos mais finos (eff_rad*0.6 no shader). Aumente
+            # para afastar, diminua para aproximar.
+            GL.glUniform1f(u_sep_loc, float(self.radius) * 1.8)
+        
         if self.is_dynamic:
-            # it's working  fine for QC and QC/MM but, 
-            # I had to set 'int(len(self.vm_object.index_bonds)+4)' once some bonds wasn't 
-            # properly appearing on the glArea
-            GL.glDrawElements(GL.GL_LINES, int(len(self.vm_object.index_bonds)+4), GL.GL_UNSIGNED_INT, None)
+            n_elem = int(len(self.vm_object.index_bonds) + 4)
         else:
-            #normal rep
-            GL.glDrawElements(GL.GL_LINES, int(len(self.vm_object.index_bonds)), GL.GL_UNSIGNED_INT, None)
+            n_elem = int(len(self.vm_object.index_bonds))
+        
+        for _pass in range(3):
+            if u_pass_loc != -1:
+                GL.glUniform1i(u_pass_loc, _pass)
+            GL.glDrawElements(GL.GL_LINES, n_elem, GL.GL_UNSIGNED_INT, None)
+            if u_pass_loc == -1:
+                break  # shader sem suporte a passadas: desenha so uma vez
         
         GL.glBindVertexArray(0)
         self._disable_anti_alias_to_lines()
@@ -601,6 +699,14 @@ class SticksRepresentation(Representation):
         #radius = self.vm_session.vm_config.gl_parameters["sticks_radius"]
         custom_int_location = self.vm_glcore._get_uniform_location(self.sel_shader_program, "vert_rad")
         GL.glUniform1f(custom_int_location, self.radius)
+        # Picking: um cilindro por ligacao (passada 0). Independe de bond_order,
+        # entao o sel_vao nao precisa do VBO de ordem.
+        u_pass_loc = self.vm_glcore._get_uniform_location(self.sel_shader_program, "u_pass")
+        if u_pass_loc != -1:
+            GL.glUniform1i(u_pass_loc, 0)
+        u_sep_loc = self.vm_glcore._get_uniform_location(self.sel_shader_program, "u_separation")
+        if u_sep_loc != -1:
+            GL.glUniform1f(u_sep_loc, 0.0)
         
         
         if self.was_sel_coord_modified:

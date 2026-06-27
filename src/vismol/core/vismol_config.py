@@ -56,6 +56,16 @@ class VismolConfig:
                               "sticks_radius": 0.010,
                               "sticks_color": 0,
                               "sticks_type": 0,
+                              # Liga/desliga o desenho de ligacoes duplas/triplas
+                              # nos sticks. True = percebe e desenha as ordens;
+                              # False = tudo como ligacao simples (cilindro unico).
+                              # Pode ser alterado em runtime (ver SticksRepresentation).
+                              "multiple_bonds": True,
+                              # Liga/desliga a representacao pontilhada das ligacoes
+                              # de coordenacao metalica (metal-ligante). True =
+                              # ligacoes com metal viram linha pontilhada e saem
+                              # dos sticks; False = tratadas como ligacao normal.
+                              "metal_dashed_bonds": True,
                               "antialias": True,
                               "mouse_rotation_sensibility" : 1.5,
 

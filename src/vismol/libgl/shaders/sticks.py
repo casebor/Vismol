@@ -1,6 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
+'''
+O raio não é uma constante fixa. Ele vem de self.radius na 
+SticksRepresentation (que carrega de sticks_radius no config), 
+enviado ao shader pelo uniform vert_rad. O que é constante é 
+só o multiplicador de afinamento das múltiplas (o 0.6). 
+
+Então: para mudar a espessura geral, ajuste sticks_radius/self.radius; 
+para mudar só as múltiplas em relação às simples, ajuste o 0.6 no shader.
+Tripla triangular: aplicado. Em vez de três tubos numa linha, 
+agora os três ficam nos vértices de um triângulo equilátero, 
+no plano perpendicular à ligação. Para isso criei um segundo 
+vetor perpendicular, g_up_dir = cross(eixo, g_side_dir), formando 
+o plano da seção transversal, e cada passada ocupa um vértice a 120° 
+(90° + 120°·u_pass). A dupla continua linear (dois tubos lado a lado),
+ só a tripla mudou.
+ 
+ 
+Um detalhe para calibrar: o raio do triângulo usa o mesmo u_separation
+da dupla, o que pode espalhar os três tubos um pouco mais do que você
+quer. Se a tripla ficar "aberta" demais, há duas saídas — reduzir
+o 1.8 da separação (no representations.py), que afeta dupla e 
+tripla juntas, ou, se quiser controlar a tripla independentemente,
+multiplicar o u_separation só no ramo order == 3 (por exemplo * 0.7).
+Me diga como ficou visualmente e eu ajusto o fator certo. Também 
+dá para orientar o triângulo pela câmera (uma face sempre voltada 
+para você) se preferir, mas o triângulo fixo no espaço do objeto 
+costuma ler melhor para tripla.
+'''
+
+
+
 vertex_shader_ribbon_stick = """
 #version 330
 
@@ -42,14 +73,21 @@ in vec3 vert_coord;
 in vec3 vert_color;
 //const float vert_rad = 0.10;
 uniform float vert_rad; // float uniform
+// Ordem da ligacao por atomo (1 = simples, 2 = dupla, 3 = tripla). Vem do
+// VBO 'vert_bond_order' alimentado por SticksRepresentation. Inteiro para
+// evitar erros de comparacao com float. Default 1 se o atributo nao existir.
+in int vert_bond_order;
 
 out vec3 geom_color;
 out vec4 geom_coord;
 out float geom_rad;
+flat out int geom_bond_order;
 
 void main(){
     geom_color = vert_color;
     geom_rad = vert_rad;
+    geom_bond_order = vert_bond_order;
+    //geom_bond_order = 2;
     geom_coord = view_mat * model_mat * vec4(vert_coord, 1.0);
 }
 """
@@ -64,12 +102,24 @@ layout(std140) uniform CameraMatrices {
 precision highp float; 
 precision highp int;
 layout (lines) in;
+// UM cilindro por invocacao do GS (40 vertices) -> sempre cabe no limite
+// GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS (1024 e comum). Ligacoes multiplas
+// sao desenhadas em PASSADAS separadas no lado Python (u_pass = 0,1,2), cada
+// passada deslocando o cilindro lateralmente; passadas que nao se aplicam a
+// ordem da ligacao nao emitem nada. Assim duplas/triplas funcionam sem
+// estourar o limite de saida do geometry shader.
 layout (triangle_strip, max_vertices = 40) out;
+
+// Passada atual (0 = central/primeiro, 1 e 2 = laterais) e separacao base
+// entre cilindros de uma mesma ligacao. Setados por draw_representation.
+uniform int u_pass;
+uniform float u_separation;
 
 
 in vec3 geom_color[];
 in vec4 geom_coord[];
 in float geom_rad[];
+flat in int geom_bond_order[];
 
 out vec3 frag_coord;
 out vec3 frag_color;
@@ -112,6 +162,18 @@ varying vec3 p_00, p_01, p_02, p_03, p_04, p_05, p_06, p_07, p_08;
 varying vec3 p_09, p_10, p_11, p_12, p_13, p_14, p_15, p_16, p_17;
 varying vec3 p_18, p_19, p_20, p_21, p_22, p_23, p_24, p_25, p_26;
 
+// Centros efetivos do cilindro atual. Para ligacao simples sao iguais a
+// geom_coord[0]/[1] e ao ponto medio. Para dupla/tripla, cada cilindro e
+// deslocado lateralmente por 'bond_offset' (calculado no main a partir de
+// um vetor perpendicular a ligacao, orientado pela camera). calculate_points
+// e a emissao usam center0/center1/mid_c em vez de geom_coord/mid_point.
+vec3 center0;
+vec3 center1;
+vec3 mid_c;
+// Raio efetivo do cilindro atual. Igual a geom_rad[0] para ligacoes simples;
+// reduzido para ligacoes multiplas (definido no main antes de emit_cylinder).
+float eff_rad;
+
 float get_angle(vec3 vec_A, vec3 vec_B){
     // Returns the angle in radians formed between the vectors A and B. The
     // vectors are initially normalized to avoid errors.
@@ -146,204 +208,204 @@ mat3 get_rot_mat(float my_angle, vec3 dir_vec){
 
 void calculate_points(){
     // This void function fills the vertices of the sticks with data.
-    p_00.x = (bs_0.x*rot_mat[0][0] + bs_0.y*rot_mat[0][1] + bs_0.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_00.y = (bs_0.x*rot_mat[1][0] + bs_0.y*rot_mat[1][1] + bs_0.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_00.z = (bs_0.x*rot_mat[2][0] + bs_0.y*rot_mat[2][1] + bs_0.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_01.x = (bs_1.x*rot_mat[0][0] + bs_1.y*rot_mat[0][1] + bs_1.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_01.y = (bs_1.x*rot_mat[1][0] + bs_1.y*rot_mat[1][1] + bs_1.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_01.z = (bs_1.x*rot_mat[2][0] + bs_1.y*rot_mat[2][1] + bs_1.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_02.x = (bs_2.x*rot_mat[0][0] + bs_2.y*rot_mat[0][1] + bs_2.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_02.y = (bs_2.x*rot_mat[1][0] + bs_2.y*rot_mat[1][1] + bs_2.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_02.z = (bs_2.x*rot_mat[2][0] + bs_2.y*rot_mat[2][1] + bs_2.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_03.x = (bs_3.x*rot_mat[0][0] + bs_3.y*rot_mat[0][1] + bs_3.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_03.y = (bs_3.x*rot_mat[1][0] + bs_3.y*rot_mat[1][1] + bs_3.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_03.z = (bs_3.x*rot_mat[2][0] + bs_3.y*rot_mat[2][1] + bs_3.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_04.x = (bs_4.x*rot_mat[0][0] + bs_4.y*rot_mat[0][1] + bs_4.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_04.y = (bs_4.x*rot_mat[1][0] + bs_4.y*rot_mat[1][1] + bs_4.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_04.z = (bs_4.x*rot_mat[2][0] + bs_4.y*rot_mat[2][1] + bs_4.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_05.x = (bs_5.x*rot_mat[0][0] + bs_5.y*rot_mat[0][1] + bs_5.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_05.y = (bs_5.x*rot_mat[1][0] + bs_5.y*rot_mat[1][1] + bs_5.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_05.z = (bs_5.x*rot_mat[2][0] + bs_5.y*rot_mat[2][1] + bs_5.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_06.x = (bs_6.x*rot_mat[0][0] + bs_6.y*rot_mat[0][1] + bs_6.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_06.y = (bs_6.x*rot_mat[1][0] + bs_6.y*rot_mat[1][1] + bs_6.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_06.z = (bs_6.x*rot_mat[2][0] + bs_6.y*rot_mat[2][1] + bs_6.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_07.x = (bs_7.x*rot_mat[0][0] + bs_7.y*rot_mat[0][1] + bs_7.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_07.y = (bs_7.x*rot_mat[1][0] + bs_7.y*rot_mat[1][1] + bs_7.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_07.z = (bs_7.x*rot_mat[2][0] + bs_7.y*rot_mat[2][1] + bs_7.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
-    p_08.x = (bs_8.x*rot_mat[0][0] + bs_8.y*rot_mat[0][1] + bs_8.z*rot_mat[0][2])*geom_rad[0] + geom_coord[0].x;
-    p_08.y = (bs_8.x*rot_mat[1][0] + bs_8.y*rot_mat[1][1] + bs_8.z*rot_mat[1][2])*geom_rad[0] + geom_coord[0].y;
-    p_08.z = (bs_8.x*rot_mat[2][0] + bs_8.y*rot_mat[2][1] + bs_8.z*rot_mat[2][2])*geom_rad[0] + geom_coord[0].z;
+    p_00.x = (bs_0.x*rot_mat[0][0] + bs_0.y*rot_mat[0][1] + bs_0.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_00.y = (bs_0.x*rot_mat[1][0] + bs_0.y*rot_mat[1][1] + bs_0.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_00.z = (bs_0.x*rot_mat[2][0] + bs_0.y*rot_mat[2][1] + bs_0.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_01.x = (bs_1.x*rot_mat[0][0] + bs_1.y*rot_mat[0][1] + bs_1.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_01.y = (bs_1.x*rot_mat[1][0] + bs_1.y*rot_mat[1][1] + bs_1.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_01.z = (bs_1.x*rot_mat[2][0] + bs_1.y*rot_mat[2][1] + bs_1.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_02.x = (bs_2.x*rot_mat[0][0] + bs_2.y*rot_mat[0][1] + bs_2.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_02.y = (bs_2.x*rot_mat[1][0] + bs_2.y*rot_mat[1][1] + bs_2.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_02.z = (bs_2.x*rot_mat[2][0] + bs_2.y*rot_mat[2][1] + bs_2.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_03.x = (bs_3.x*rot_mat[0][0] + bs_3.y*rot_mat[0][1] + bs_3.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_03.y = (bs_3.x*rot_mat[1][0] + bs_3.y*rot_mat[1][1] + bs_3.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_03.z = (bs_3.x*rot_mat[2][0] + bs_3.y*rot_mat[2][1] + bs_3.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_04.x = (bs_4.x*rot_mat[0][0] + bs_4.y*rot_mat[0][1] + bs_4.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_04.y = (bs_4.x*rot_mat[1][0] + bs_4.y*rot_mat[1][1] + bs_4.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_04.z = (bs_4.x*rot_mat[2][0] + bs_4.y*rot_mat[2][1] + bs_4.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_05.x = (bs_5.x*rot_mat[0][0] + bs_5.y*rot_mat[0][1] + bs_5.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_05.y = (bs_5.x*rot_mat[1][0] + bs_5.y*rot_mat[1][1] + bs_5.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_05.z = (bs_5.x*rot_mat[2][0] + bs_5.y*rot_mat[2][1] + bs_5.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_06.x = (bs_6.x*rot_mat[0][0] + bs_6.y*rot_mat[0][1] + bs_6.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_06.y = (bs_6.x*rot_mat[1][0] + bs_6.y*rot_mat[1][1] + bs_6.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_06.z = (bs_6.x*rot_mat[2][0] + bs_6.y*rot_mat[2][1] + bs_6.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_07.x = (bs_7.x*rot_mat[0][0] + bs_7.y*rot_mat[0][1] + bs_7.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_07.y = (bs_7.x*rot_mat[1][0] + bs_7.y*rot_mat[1][1] + bs_7.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_07.z = (bs_7.x*rot_mat[2][0] + bs_7.y*rot_mat[2][1] + bs_7.z*rot_mat[2][2])*eff_rad + center0.z;
+    p_08.x = (bs_8.x*rot_mat[0][0] + bs_8.y*rot_mat[0][1] + bs_8.z*rot_mat[0][2])*eff_rad + center0.x;
+    p_08.y = (bs_8.x*rot_mat[1][0] + bs_8.y*rot_mat[1][1] + bs_8.z*rot_mat[1][2])*eff_rad + center0.y;
+    p_08.z = (bs_8.x*rot_mat[2][0] + bs_8.y*rot_mat[2][1] + bs_8.z*rot_mat[2][2])*eff_rad + center0.z;
     
-    p_09.x = (up_0.x*rot_mat[0][0] + up_0.y*rot_mat[0][1] + up_0.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_09.y = (up_0.x*rot_mat[1][0] + up_0.y*rot_mat[1][1] + up_0.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_09.z = (up_0.x*rot_mat[2][0] + up_0.y*rot_mat[2][1] + up_0.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_10.x = (up_1.x*rot_mat[0][0] + up_1.y*rot_mat[0][1] + up_1.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_10.y = (up_1.x*rot_mat[1][0] + up_1.y*rot_mat[1][1] + up_1.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_10.z = (up_1.x*rot_mat[2][0] + up_1.y*rot_mat[2][1] + up_1.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_11.x = (up_2.x*rot_mat[0][0] + up_2.y*rot_mat[0][1] + up_2.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_11.y = (up_2.x*rot_mat[1][0] + up_2.y*rot_mat[1][1] + up_2.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_11.z = (up_2.x*rot_mat[2][0] + up_2.y*rot_mat[2][1] + up_2.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_12.x = (up_3.x*rot_mat[0][0] + up_3.y*rot_mat[0][1] + up_3.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_12.y = (up_3.x*rot_mat[1][0] + up_3.y*rot_mat[1][1] + up_3.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_12.z = (up_3.x*rot_mat[2][0] + up_3.y*rot_mat[2][1] + up_3.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_13.x = (up_4.x*rot_mat[0][0] + up_4.y*rot_mat[0][1] + up_4.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_13.y = (up_4.x*rot_mat[1][0] + up_4.y*rot_mat[1][1] + up_4.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_13.z = (up_4.x*rot_mat[2][0] + up_4.y*rot_mat[2][1] + up_4.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_14.x = (up_5.x*rot_mat[0][0] + up_5.y*rot_mat[0][1] + up_5.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_14.y = (up_5.x*rot_mat[1][0] + up_5.y*rot_mat[1][1] + up_5.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_14.z = (up_5.x*rot_mat[2][0] + up_5.y*rot_mat[2][1] + up_5.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_15.x = (up_6.x*rot_mat[0][0] + up_6.y*rot_mat[0][1] + up_6.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_15.y = (up_6.x*rot_mat[1][0] + up_6.y*rot_mat[1][1] + up_6.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_15.z = (up_6.x*rot_mat[2][0] + up_6.y*rot_mat[2][1] + up_6.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_16.x = (up_7.x*rot_mat[0][0] + up_7.y*rot_mat[0][1] + up_7.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_16.y = (up_7.x*rot_mat[1][0] + up_7.y*rot_mat[1][1] + up_7.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_16.z = (up_7.x*rot_mat[2][0] + up_7.y*rot_mat[2][1] + up_7.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
-    p_17.x = (up_8.x*rot_mat[0][0] + up_8.y*rot_mat[0][1] + up_8.z*rot_mat[0][2])*geom_rad[0] + mid_point.x;
-    p_17.y = (up_8.x*rot_mat[1][0] + up_8.y*rot_mat[1][1] + up_8.z*rot_mat[1][2])*geom_rad[0] + mid_point.y;
-    p_17.z = (up_8.x*rot_mat[2][0] + up_8.y*rot_mat[2][1] + up_8.z*rot_mat[2][2])*geom_rad[0] + mid_point.z;
+    p_09.x = (up_0.x*rot_mat[0][0] + up_0.y*rot_mat[0][1] + up_0.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_09.y = (up_0.x*rot_mat[1][0] + up_0.y*rot_mat[1][1] + up_0.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_09.z = (up_0.x*rot_mat[2][0] + up_0.y*rot_mat[2][1] + up_0.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_10.x = (up_1.x*rot_mat[0][0] + up_1.y*rot_mat[0][1] + up_1.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_10.y = (up_1.x*rot_mat[1][0] + up_1.y*rot_mat[1][1] + up_1.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_10.z = (up_1.x*rot_mat[2][0] + up_1.y*rot_mat[2][1] + up_1.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_11.x = (up_2.x*rot_mat[0][0] + up_2.y*rot_mat[0][1] + up_2.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_11.y = (up_2.x*rot_mat[1][0] + up_2.y*rot_mat[1][1] + up_2.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_11.z = (up_2.x*rot_mat[2][0] + up_2.y*rot_mat[2][1] + up_2.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_12.x = (up_3.x*rot_mat[0][0] + up_3.y*rot_mat[0][1] + up_3.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_12.y = (up_3.x*rot_mat[1][0] + up_3.y*rot_mat[1][1] + up_3.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_12.z = (up_3.x*rot_mat[2][0] + up_3.y*rot_mat[2][1] + up_3.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_13.x = (up_4.x*rot_mat[0][0] + up_4.y*rot_mat[0][1] + up_4.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_13.y = (up_4.x*rot_mat[1][0] + up_4.y*rot_mat[1][1] + up_4.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_13.z = (up_4.x*rot_mat[2][0] + up_4.y*rot_mat[2][1] + up_4.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_14.x = (up_5.x*rot_mat[0][0] + up_5.y*rot_mat[0][1] + up_5.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_14.y = (up_5.x*rot_mat[1][0] + up_5.y*rot_mat[1][1] + up_5.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_14.z = (up_5.x*rot_mat[2][0] + up_5.y*rot_mat[2][1] + up_5.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_15.x = (up_6.x*rot_mat[0][0] + up_6.y*rot_mat[0][1] + up_6.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_15.y = (up_6.x*rot_mat[1][0] + up_6.y*rot_mat[1][1] + up_6.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_15.z = (up_6.x*rot_mat[2][0] + up_6.y*rot_mat[2][1] + up_6.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_16.x = (up_7.x*rot_mat[0][0] + up_7.y*rot_mat[0][1] + up_7.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_16.y = (up_7.x*rot_mat[1][0] + up_7.y*rot_mat[1][1] + up_7.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_16.z = (up_7.x*rot_mat[2][0] + up_7.y*rot_mat[2][1] + up_7.z*rot_mat[2][2])*eff_rad + mid_c.z;
+    p_17.x = (up_8.x*rot_mat[0][0] + up_8.y*rot_mat[0][1] + up_8.z*rot_mat[0][2])*eff_rad + mid_c.x;
+    p_17.y = (up_8.x*rot_mat[1][0] + up_8.y*rot_mat[1][1] + up_8.z*rot_mat[1][2])*eff_rad + mid_c.y;
+    p_17.z = (up_8.x*rot_mat[2][0] + up_8.y*rot_mat[2][1] + up_8.z*rot_mat[2][2])*eff_rad + mid_c.z;
     
-    p_18.x = (bs_0.x*rot_mat[0][0] + bs_0.y*rot_mat[0][1] + bs_0.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_18.y = (bs_0.x*rot_mat[1][0] + bs_0.y*rot_mat[1][1] + bs_0.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_18.z = (bs_0.x*rot_mat[2][0] + bs_0.y*rot_mat[2][1] + bs_0.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_19.x = (bs_1.x*rot_mat[0][0] + bs_1.y*rot_mat[0][1] + bs_1.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_19.y = (bs_1.x*rot_mat[1][0] + bs_1.y*rot_mat[1][1] + bs_1.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_19.z = (bs_1.x*rot_mat[2][0] + bs_1.y*rot_mat[2][1] + bs_1.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_20.x = (bs_2.x*rot_mat[0][0] + bs_2.y*rot_mat[0][1] + bs_2.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_20.y = (bs_2.x*rot_mat[1][0] + bs_2.y*rot_mat[1][1] + bs_2.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_20.z = (bs_2.x*rot_mat[2][0] + bs_2.y*rot_mat[2][1] + bs_2.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_21.x = (bs_3.x*rot_mat[0][0] + bs_3.y*rot_mat[0][1] + bs_3.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_21.y = (bs_3.x*rot_mat[1][0] + bs_3.y*rot_mat[1][1] + bs_3.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_21.z = (bs_3.x*rot_mat[2][0] + bs_3.y*rot_mat[2][1] + bs_3.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_22.x = (bs_4.x*rot_mat[0][0] + bs_4.y*rot_mat[0][1] + bs_4.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_22.y = (bs_4.x*rot_mat[1][0] + bs_4.y*rot_mat[1][1] + bs_4.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_22.z = (bs_4.x*rot_mat[2][0] + bs_4.y*rot_mat[2][1] + bs_4.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_23.x = (bs_5.x*rot_mat[0][0] + bs_5.y*rot_mat[0][1] + bs_5.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_23.y = (bs_5.x*rot_mat[1][0] + bs_5.y*rot_mat[1][1] + bs_5.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_23.z = (bs_5.x*rot_mat[2][0] + bs_5.y*rot_mat[2][1] + bs_5.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_24.x = (bs_6.x*rot_mat[0][0] + bs_6.y*rot_mat[0][1] + bs_6.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_24.y = (bs_6.x*rot_mat[1][0] + bs_6.y*rot_mat[1][1] + bs_6.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_24.z = (bs_6.x*rot_mat[2][0] + bs_6.y*rot_mat[2][1] + bs_6.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_25.x = (bs_7.x*rot_mat[0][0] + bs_7.y*rot_mat[0][1] + bs_7.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_25.y = (bs_7.x*rot_mat[1][0] + bs_7.y*rot_mat[1][1] + bs_7.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_25.z = (bs_7.x*rot_mat[2][0] + bs_7.y*rot_mat[2][1] + bs_7.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
-    p_26.x = (bs_8.x*rot_mat[0][0] + bs_8.y*rot_mat[0][1] + bs_8.z*rot_mat[0][2])*geom_rad[0] + geom_coord[1].x;
-    p_26.y = (bs_8.x*rot_mat[1][0] + bs_8.y*rot_mat[1][1] + bs_8.z*rot_mat[1][2])*geom_rad[0] + geom_coord[1].y;
-    p_26.z = (bs_8.x*rot_mat[2][0] + bs_8.y*rot_mat[2][1] + bs_8.z*rot_mat[2][2])*geom_rad[0] + geom_coord[1].z;
+    p_18.x = (bs_0.x*rot_mat[0][0] + bs_0.y*rot_mat[0][1] + bs_0.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_18.y = (bs_0.x*rot_mat[1][0] + bs_0.y*rot_mat[1][1] + bs_0.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_18.z = (bs_0.x*rot_mat[2][0] + bs_0.y*rot_mat[2][1] + bs_0.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_19.x = (bs_1.x*rot_mat[0][0] + bs_1.y*rot_mat[0][1] + bs_1.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_19.y = (bs_1.x*rot_mat[1][0] + bs_1.y*rot_mat[1][1] + bs_1.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_19.z = (bs_1.x*rot_mat[2][0] + bs_1.y*rot_mat[2][1] + bs_1.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_20.x = (bs_2.x*rot_mat[0][0] + bs_2.y*rot_mat[0][1] + bs_2.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_20.y = (bs_2.x*rot_mat[1][0] + bs_2.y*rot_mat[1][1] + bs_2.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_20.z = (bs_2.x*rot_mat[2][0] + bs_2.y*rot_mat[2][1] + bs_2.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_21.x = (bs_3.x*rot_mat[0][0] + bs_3.y*rot_mat[0][1] + bs_3.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_21.y = (bs_3.x*rot_mat[1][0] + bs_3.y*rot_mat[1][1] + bs_3.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_21.z = (bs_3.x*rot_mat[2][0] + bs_3.y*rot_mat[2][1] + bs_3.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_22.x = (bs_4.x*rot_mat[0][0] + bs_4.y*rot_mat[0][1] + bs_4.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_22.y = (bs_4.x*rot_mat[1][0] + bs_4.y*rot_mat[1][1] + bs_4.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_22.z = (bs_4.x*rot_mat[2][0] + bs_4.y*rot_mat[2][1] + bs_4.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_23.x = (bs_5.x*rot_mat[0][0] + bs_5.y*rot_mat[0][1] + bs_5.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_23.y = (bs_5.x*rot_mat[1][0] + bs_5.y*rot_mat[1][1] + bs_5.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_23.z = (bs_5.x*rot_mat[2][0] + bs_5.y*rot_mat[2][1] + bs_5.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_24.x = (bs_6.x*rot_mat[0][0] + bs_6.y*rot_mat[0][1] + bs_6.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_24.y = (bs_6.x*rot_mat[1][0] + bs_6.y*rot_mat[1][1] + bs_6.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_24.z = (bs_6.x*rot_mat[2][0] + bs_6.y*rot_mat[2][1] + bs_6.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_25.x = (bs_7.x*rot_mat[0][0] + bs_7.y*rot_mat[0][1] + bs_7.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_25.y = (bs_7.x*rot_mat[1][0] + bs_7.y*rot_mat[1][1] + bs_7.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_25.z = (bs_7.x*rot_mat[2][0] + bs_7.y*rot_mat[2][1] + bs_7.z*rot_mat[2][2])*eff_rad + center1.z;
+    p_26.x = (bs_8.x*rot_mat[0][0] + bs_8.y*rot_mat[0][1] + bs_8.z*rot_mat[0][2])*eff_rad + center1.x;
+    p_26.y = (bs_8.x*rot_mat[1][0] + bs_8.y*rot_mat[1][1] + bs_8.z*rot_mat[1][2])*eff_rad + center1.y;
+    p_26.z = (bs_8.x*rot_mat[2][0] + bs_8.y*rot_mat[2][1] + bs_8.z*rot_mat[2][2])*eff_rad + center1.z;
 }
 
-void main(){
-    mid_point = (geom_coord[0].xyz + geom_coord[1].xyz)/2;
-    // vec_p0_p1 is the vector defined by the line.
-    vec3 vec_p0_p1 = geom_coord[1].xyz - geom_coord[0].xyz;
-    // ort_vec is the orthogonal vector between the line vector and the Y axis.
-    vec3 ort_vec = normalize(cross(vec3(0,1,0), vec_p0_p1));
-    // g_angle is the angle between the line vector and the Y axis.
-    float g_angle = get_angle(vec3(0,1,0), vec_p0_p1);
-    // g_length is the line vector length or simply the line length.
-    float g_length = length(vec_p0_p1);
-    rot_mat = get_rot_mat(g_angle, ort_vec);
+// Vetor perpendicular a ligacao, orientado pela camera, usado para deslocar
+// os cilindros de ligacoes multiplas para os lados (do ponto de vista da
+// camera). Mesma ideia do shader de lines: cross(eixo_da_ligacao, dir_camera).
+// Calculado uma vez no main e reutilizado por cilindro.
+vec3 g_side_dir;
+
+// Eixo/rotacao do cilindro: identicos para todos os cilindros de uma mesma
+// ligacao, calculados uma vez no main.
+// (rot_mat ja e global; aqui so documentamos.)
+
+void emit_cylinder(){
     calculate_points();
     // Now we send the vertices to the fragment shader in a defined order
     // base-> 0, 9, 1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 0, 9
     gl_Position = proj_mat * vec4(p_00, 1);
     frag_coord = p_00;
     frag_color = geom_color[0];
-    frag_norm = p_00 - geom_coord[0].xyz;
+    frag_norm = p_00 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_09, 1);
     frag_coord = p_09;
     frag_color = geom_color[0];
-    frag_norm = p_09 - mid_point;
+    frag_norm = p_09 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_01, 1);
     frag_coord = p_01;
     frag_color = geom_color[0];
-    frag_norm = p_01 - geom_coord[0].xyz;
+    frag_norm = p_01 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_10, 1);
     frag_coord = p_10;
     frag_color = geom_color[0];
-    frag_norm = p_10 - mid_point;
+    frag_norm = p_10 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_02, 1);
     frag_coord = p_02;
     frag_color = geom_color[0];
-    frag_norm = p_02 - geom_coord[0].xyz;
+    frag_norm = p_02 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_11, 1);
     frag_coord = p_11;
     frag_color = geom_color[0];
-    frag_norm = p_11 - mid_point;
+    frag_norm = p_11 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_03, 1);
     frag_coord = p_03;
     frag_color = geom_color[0];
-    frag_norm = p_03 - geom_coord[0].xyz;
+    frag_norm = p_03 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_12, 1);
     frag_coord = p_12;
     frag_color = geom_color[0];
-    frag_norm = p_12 - mid_point;
+    frag_norm = p_12 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_04, 1);
     frag_coord = p_04;
     frag_color = geom_color[0];
-    frag_norm = p_04 - geom_coord[0].xyz;
+    frag_norm = p_04 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_13, 1);
     frag_coord = p_13;
     frag_color = geom_color[0];
-    frag_norm = p_13 - mid_point;
+    frag_norm = p_13 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_05, 1);
     frag_coord = p_05;
     frag_color = geom_color[0];
-    frag_norm = p_05 - geom_coord[0].xyz;
+    frag_norm = p_05 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_14, 1);
     frag_coord = p_14;
     frag_color = geom_color[0];
-    frag_norm = p_14 - mid_point;
+    frag_norm = p_14 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_06, 1);
     frag_coord = p_06;
     frag_color = geom_color[0];
-    frag_norm = p_06 - geom_coord[0].xyz;
+    frag_norm = p_06 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_15, 1);
     frag_coord = p_15;
     frag_color = geom_color[0];
-    frag_norm = p_15 - mid_point;
+    frag_norm = p_15 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_07, 1);
     frag_coord = p_07;
     frag_color = geom_color[0];
-    frag_norm = p_07 - geom_coord[0].xyz;
+    frag_norm = p_07 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_16, 1);
     frag_coord = p_16;
     frag_color = geom_color[0];
-    frag_norm = p_16 - mid_point;
+    frag_norm = p_16 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_08, 1);
     frag_coord = p_08;
     frag_color = geom_color[0];
-    frag_norm = p_08 - geom_coord[0].xyz;
+    frag_norm = p_08 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_17, 1);
     frag_coord = p_17;
     frag_color = geom_color[0];
-    frag_norm = p_17 - mid_point;
+    frag_norm = p_17 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_00, 1);
     frag_coord = p_00;
     frag_color = geom_color[0];
-    frag_norm = p_00 - geom_coord[0].xyz;
+    frag_norm = p_00 - center0.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_09, 1);
     frag_coord = p_09;
     frag_color = geom_color[0];
-    frag_norm = p_09 - mid_point;
+    frag_norm = p_09 - mid_c;
     EmitVertex();
     EndPrimitive();
     
@@ -351,104 +413,162 @@ void main(){
     gl_Position = proj_mat * vec4(p_09, 1);
     frag_coord = p_09;
     frag_color = geom_color[1];
-    frag_norm = p_09 - mid_point;
+    frag_norm = p_09 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_18, 1);
     frag_coord = p_18;
     frag_color = geom_color[1];
-    frag_norm = p_18 - geom_coord[1].xyz;
+    frag_norm = p_18 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_10, 1);
     frag_coord = p_10;
     frag_color = geom_color[1];
-    frag_norm = p_10 - mid_point;
+    frag_norm = p_10 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_19, 1);
     frag_coord = p_19;
     frag_color = geom_color[1];
-    frag_norm = p_19 - geom_coord[1].xyz;
+    frag_norm = p_19 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_11, 1);
     frag_coord = p_11;
     frag_color = geom_color[1];
-    frag_norm = p_11 - mid_point;
+    frag_norm = p_11 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_20, 1);
     frag_coord = p_20;
     frag_color = geom_color[1];
-    frag_norm = p_20 - geom_coord[1].xyz;
+    frag_norm = p_20 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_12, 1);
     frag_coord = p_12;
     frag_color = geom_color[1];
-    frag_norm = p_12 - mid_point;
+    frag_norm = p_12 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_21, 1);
     frag_coord = p_21;
     frag_color = geom_color[1];
-    frag_norm = p_21 - geom_coord[1].xyz;
+    frag_norm = p_21 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_13, 1);
     frag_coord = p_13;
     frag_color = geom_color[1];
-    frag_norm = p_13 - mid_point;
+    frag_norm = p_13 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_22, 1);
     frag_coord = p_22;
     frag_color = geom_color[1];
-    frag_norm = p_22 - geom_coord[1].xyz;
+    frag_norm = p_22 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_14, 1);
     frag_coord = p_14;
     frag_color = geom_color[1];
-    frag_norm = p_14 - mid_point;
+    frag_norm = p_14 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_23, 1);
     frag_coord = p_23;
     frag_color = geom_color[1];
-    frag_norm = p_23 - geom_coord[1].xyz;
+    frag_norm = p_23 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_15, 1);
     frag_coord = p_15;
     frag_color = geom_color[1];
-    frag_norm = p_15 - mid_point;
+    frag_norm = p_15 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_24, 1);
     frag_coord = p_24;
     frag_color = geom_color[1];
-    frag_norm = p_24 - geom_coord[1].xyz;
+    frag_norm = p_24 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_16, 1);
     frag_coord = p_16;
     frag_color = geom_color[1];
-    frag_norm = p_16 - mid_point;
+    frag_norm = p_16 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_25, 1);
     frag_coord = p_25;
     frag_color = geom_color[1];
-    frag_norm = p_25 - geom_coord[1].xyz;
+    frag_norm = p_25 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_17, 1);
     frag_coord = p_17;
     frag_color = geom_color[1];
-    frag_norm = p_17 - mid_point;
+    frag_norm = p_17 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_26, 1);
     frag_coord = p_26;
     frag_color = geom_color[1];
-    frag_norm = p_26 - geom_coord[1].xyz;
+    frag_norm = p_26 - center1.xyz;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_09, 1);
     frag_coord = p_09;
     frag_color = geom_color[1];
-    frag_norm = p_09 - mid_point;
+    frag_norm = p_09 - mid_c;
     EmitVertex();
     gl_Position = proj_mat * vec4(p_18, 1);
     frag_coord = p_18;
     frag_color = geom_color[1];
-    frag_norm = p_18 - geom_coord[1].xyz;
+    frag_norm = p_18 - center1.xyz;
     EmitVertex();
     EndPrimitive();
+}
+
+void main(){
+    // Ordem da ligacao (lida do 2o atomo da aresta, como no shader de lines).
+    int order = geom_bond_order[1];
+    if (order < 1) order = 1;
+    if (order > 3) order = 3;
+
+    // Esta passada produz geometria para esta ligacao?
+    //   u_pass 0: sempre (cilindro central/primeiro)
+    //   u_pass 1: ordem >= 2
+    //   u_pass 2: ordem >= 3
+    if (u_pass > 0 && order < u_pass + 1) {
+        return; // nada a emitir nesta passada
+    }
+
+    // Eixo da ligacao e matriz de rotacao do cilindro.
+    vec3 vec_p0_p1 = geom_coord[1].xyz - geom_coord[0].xyz;
+    vec3 ort_vec = normalize(cross(vec3(0,1,0), vec_p0_p1));
+    float g_angle = get_angle(vec3(0,1,0), vec_p0_p1);
+    rot_mat = get_rot_mat(g_angle, ort_vec);
+
+    // Direcao lateral orientada pela camera (separa os cilindros lado a lado
+    // na tela em qualquer orientacao). Fallback para ort_vec se degenerar.
+    vec3 mid_view = (geom_coord[0].xyz + geom_coord[1].xyz) * 0.5;
+    vec3 to_cam = normalize(-mid_view);
+    g_side_dir = cross(normalize(vec_p0_p1), to_cam);
+    if (length(g_side_dir) < 1e-4) {
+        g_side_dir = ort_vec;
+    }
+    g_side_dir = normalize(g_side_dir);
+    // Segundo vetor perpendicular, ortogonal ao eixo e a g_side_dir. Junto com
+    // g_side_dir forma o plano da secao transversal da ligacao, usado para
+    // posicionar os cilindros (triangulo na ligacao tripla).
+    vec3 g_up_dir = normalize(cross(normalize(vec_p0_p1), g_side_dir));
+
+    // Offset 2D no plano perpendicular, conforme a ordem e a passada.
+    vec3 off = vec3(0.0);
+    if (order == 2) {
+        // Dois cilindros lado a lado: -sep/2 e +sep/2 ao longo de g_side_dir.
+        float d = (u_pass == 0) ? (-u_separation * 0.5) : (u_separation * 0.5);
+        off = g_side_dir * d;
+    } else if (order == 3) {
+        // Tres cilindros nos vertices de um triangulo equilatero, no plano
+        // perpendicular. Cada passada ocupa um vertice (angulos 90, 210, 330
+        // graus), com raio 'u_separation' a partir do centro do eixo.
+        float ang = radians(90.0 + 120.0 * float(u_pass));
+        off = (g_side_dir * cos(ang) + g_up_dir * sin(ang)) * u_separation;
+    }
+
+    center0 = geom_coord[0].xyz + off;
+    center1 = geom_coord[1].xyz + off;
+    mid_c = (center0 + center1) * 0.5;
+    // Afinamento: ligacoes multiplas usam cilindros mais finos; simples mantem
+    // o raio cheio. Ajuste o fator 0.6 a gosto (menor = mais fino).
+    eff_rad = (order > 1) ? (geom_rad[0] * 0.4) : geom_rad[0];
+    //eff_rad = (order > 1) ? (geom_rad[0] * 0.6) : geom_rad[0];
+    emit_cylinder();
 }
 """
 
@@ -945,7 +1065,15 @@ shader_type ={0: {"vertex_shader"      : vertex_shader_sticks,
                   "sel_vertex_shader"  : vertex_shader_ribbon_stick, 
                   "sel_geometry_shader": geometry_shader_sticks,     
                   "sel_fragment_shader": sel_fragment_shader_sticks  
-                 },
+                    },
+               3: {"vertex_shader"     : vertex_shader_ribbon_stick,
+                  "geometry_shader"    : geometry_shader_sticks,
+                  "fragment_shader"    : fragment_shader_sticks,
+                  "sel_vertex_shader"  : vertex_shader_sticks,
+                  "sel_geometry_shader": geometry_shader_sticks,
+                  "sel_fragment_shader": sel_fragment_shader_sticks
+                 },  
+ 
              
   
         

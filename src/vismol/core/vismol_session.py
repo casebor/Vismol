@@ -180,26 +180,26 @@ class VismolSession(Config):
                 vm_object.create_representation(rep_type = rep_type)
             show_hide_indexes = []
             if rep_type == "lines":
-                for bond in vm_object.bonds:
+                for bond in vm_object.bonds.values():
                     if bond.atom_i.lines and bond.atom_j.lines:
                         show_hide_indexes.append(bond.atom_index_i)
                         show_hide_indexes.append(bond.atom_index_j)
             
             elif rep_type == "sticks":
-                for bond in vm_object.bonds:
+                for bond in vm_object.bonds.values():
                     if bond.atom_i.sticks and bond.atom_j.sticks:
                         show_hide_indexes.append(bond.atom_index_i)
                         show_hide_indexes.append(bond.atom_index_j)
             
             elif rep_type == "dash":
-                for bond in vm_object.bonds:
+                for bond in vm_object.bonds.values():
                     if bond.atom_i.dash and bond.atom_j.dash:
                         show_hide_indexes.append(bond.atom_index_i)
                         show_hide_indexes.append(bond.atom_index_j)
             
             elif rep_type == "dynamic":
                 self.define_dynamic_bonds(selection = selection)
-                for bond in vm_object.bonds:
+                for bond in vm_object.bonds.values():
                     if bond.atom_i.dynamic and bond.atom_j.dynamic:
                         show_hide_indexes.append(bond.atom_index_i)
                         show_hide_indexes.append(bond.atom_index_j)
@@ -225,7 +225,7 @@ class VismolSession(Config):
                         show_hide_indexes.append(atom.atom_id)
             
             elif rep_type == "stick_spheres":
-                for bond in vm_object.bonds:
+                for bond in vm_object.bonds.values():
                     if bond.atom_i.stick_spheres and bond.atom_j.stick_spheres:
                         show_hide_indexes.append(bond.atom_index_i)
                         show_hide_indexes.append(bond.atom_index_j)

@@ -119,12 +119,22 @@ class VismolObject:
         self.selected_atom_ids = set() # Set to store the IDs of selected atoms (not yet defined in the code)
         
         
-        self.bonds = None       # Bond objects representing connections between atoms
+        self.bonds = None       # dict {(i,j): Bond} -- ligacoes indexadas pelo par
+                                # de indices de atomos NORMALIZADO (menor, maior).
+                                # Itere com self.bonds.values(); busque uma ligacao
+                                # com self.get_bond(i, j).
         self.index_bonds = None # Pair of atoms, something like: [1, 3, 1, 17, 3, 4, 4, 20]
                                 # Pair of atoms used to define bonds (set as None if not provided)
         
-        self.bond_order_list = None  # A bond order list [1,1,1,2,1,1, and so on...]
-        
+        self.bond_order_list = None  # A bond order list [1,1,1,2,1,1, and so on...]        
+        self.bond_order_per_atom = None # Ordem de ligacao por atomo (VBO vert_bond_order)
+        # Ligacoes de coordenacao metalica (>=1 metal) e covalentes (sem metal).
+        # Arrays achatados [i0,j0, i1,j1, ...]. metal_bonds e desenhado como
+        # linha pontilhada; covalent_bonds alimenta sticks/lines. As metalicas
+        # CONTINUAM em index_bonds/bonds (o grafo nao muda) -- isto e so um
+        # roteamento de VISUALIZACAO.
+        self.metal_bonds = None
+        self.covalent_bonds = None
         self.non_bonded_atoms = None # Array of indexes
                                      # Array of indexes for non-bonded atoms (not yet defined in the code)
                                      
@@ -147,6 +157,7 @@ class VismolObject:
             self.representations[rep_type] = None
         self.representations['ribbon_sphere'] = None
         self.representations['stick_spheres'] = None
+        self.representations['metal_dash'] = None  # ligacoes de coordenacao metalica
         
         # Additional transformation matrices for the object's visual representation
         self.model_mat = np.identity(4, dtype=np.float32)
@@ -191,6 +202,42 @@ class VismolObject:
         self.core_representations["dash"] = DashedLinesRepresentation(self, self.vm_session.vm_glcore,
                                                 active=True, indexes=self.index_bonds)
     
+    def _ensure_metal_dash(self):
+        """ Cria e ativa a representacao pontilhada das ligacoes metalicas se
+            houver ligacoes metalicas e ela ainda nao existir. Idempotente:
+            chamar varias vezes nao recria. Respeita a flag de config
+            'metal_dashed_bonds' (default True). """
+        return False
+        
+        try:
+            if not self.vm_config.gl_parameters.get("metal_dashed_bonds", True):
+                return
+        except Exception:
+            pass
+        met = getattr(self, "metal_bonds", None)
+        if met is None or len(met) == 0:
+            return
+        if self.representations.get("metal_dash") is not None:
+            self.representations["metal_dash"].active = True
+            return
+        self.create_representation(rep_type="metal_dash")
+
+    def _covalent_indexes(self):
+        """ Indices de ligacao para sticks/lines: covalentes apenas (as
+            metalicas vao para a representacao pontilhada). Cai em index_bonds
+            se a deteccao nao tiver rodado OU se a flag metal_dashed_bonds
+            estiver desligada (nesse caso metais voltam a ser sticks normais).
+        """
+        try:
+            if not self.vm_config.gl_parameters.get("metal_dashed_bonds", True):
+                return self.index_bonds
+        except Exception:
+            pass
+        cov = getattr(self, "covalent_bonds", None)
+        if cov is not None:
+            return cov
+        return self.index_bonds
+
     def create_representation(self, rep_type="lines", indexes=None):
         """   
         Function doc: Creates a visualization representation for the VismolObject.
@@ -209,8 +256,10 @@ class VismolObject:
                                                 active=True, indexes=list(self.atoms.keys()))
         elif rep_type == "lines":
             # Create a LinesRepresentation object and add it to the 'representations' dictionary
+            # Usa apenas ligacoes covalentes; as metalicas viram pontilhado.
             self.representations["lines"] = LinesRepresentation(self, self.vm_session.vm_glcore,
-                                                active=True, indexes=self.index_bonds)
+                                                active=True, indexes=self._covalent_indexes())
+            self._ensure_metal_dash()
         elif rep_type == "nonbonded":
             # Create a NonBondedRepresentation object and add it to the 'representations' dictionary
             self.representations["nonbonded"] = NonBondedRepresentation(self, self.vm_session.vm_glcore,
@@ -221,8 +270,12 @@ class VismolObject:
                                                 active=True, indexes=list(self.atoms.keys()))
         elif rep_type == "sticks":
             # Create a SticksRepresentation object and add it to the 'representations' dictionary
+            # Usa apenas ligacoes covalentes; as metalicas viram pontilhado.
             self.representations["sticks"] = SticksRepresentation(self, self.vm_session.vm_glcore,
-                                                                  active=True, indexes=self.index_bonds)
+                                                                  active=True, indexes=self._covalent_indexes())
+            # Deteccao automatica (3a): se ha ligacoes metalicas, cria/ativa a
+            # representacao pontilhada dedicada junto com os sticks.
+            self._ensure_metal_dash()
         elif rep_type == 'stick_spheres':
             # Create a SpheresRepresentation object and add it to the 'representations' dictionary
             self.representations['stick_spheres'] = SpheresRepresentation(self, self.vm_session.vm_glcore,
@@ -248,6 +301,19 @@ class VismolObject:
             # Create a DashedLinesRepresentation object and add it to the 'representations' dictionary
             self.representations["dash"] = DashedLinesRepresentation(self, self.vm_session.vm_glcore,
                                                 active=True, indexes=self.index_bonds)
+        elif rep_type == "metal_dash":
+            # Representacao pontilhada DEDICADA as ligacoes de coordenacao
+            # metalica. Usa o mesmo shader 'dash', mas so com os indices das
+            # ligacoes que envolvem metal (self.metal_bonds). Cor distinta para
+            # diferenciar das medicoes/dash genericas.
+            met = getattr(self, "metal_bonds", None)
+            if met is None:
+                met = np.array([], dtype=np.uint32)
+            rep = DashedLinesRepresentation(self, self.vm_session.vm_glcore,
+                                            active=True, indexes=met)
+            # cor das ligacoes metalicas (cinza-claro); ajuste a gosto.
+            rep.color2 = [0.6, 0.6, 0.65]
+            self.representations["metal_dash"] = rep
         elif rep_type == "ribbons":
             # Create a SticksRepresentation object with 'ribbons' name and add it to the 'representations' dictionary
             self.representations["ribbons"] = SticksRepresentation(self, self.vm_session.vm_glcore,
@@ -560,10 +626,10 @@ class VismolObject:
         atom involved in a bond is updated with the respective Bond object.
         
         self.index_bonds = [0,1  , 0,4  ,  1,3  , ...]
-        self.bonds = [bond1(obj), bond2(obj), bond3(obj), ...] 
+        self.bonds = {(i,j): bond, ...}  # dict, chave = par de indices 
         """
         assert self.bonds is None # Ensure the bonds list is not already initialized
-        self.bonds = [] # Initialize an empty list to store the Bond objects
+        self.bonds = {} # dict {(i,j): Bond}, chave = par de indices normalizado
         self.bond_order_list =[] # Initialize an empty list to store the Bond orders
         new_index_bonds = []
         # Loop through the self.index_bonds list in pairs
@@ -614,8 +680,11 @@ class VismolObject:
                 self.bond_order_list.append(bond.bond_order)
                 
                 
-                # Add the created Bond object to the bonds list
-                self.bonds.append(bond)
+                # Add the created Bond object to the bonds dict, keyed by the
+                # normalized (smaller, larger) atom-index pair so that a lookup
+                # works regardless of the order the two atoms are given.
+                bkey = (index_i, index_j) if index_i <= index_j else (index_j, index_i)
+                self.bonds[bkey] = bond
                 
                 # Update the atoms with the created Bond object, indicating their bond connections
                 self.atoms[index_i].bonds.append(bond)
@@ -627,9 +696,115 @@ class VismolObject:
         self.index_bonds     = np.array(self.index_bonds, dtype=np.uint32)
         self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
 
-        
-        self._build_bond_order_per_atom() # bachega 2026/Jun/24
+        # Percepcao robusta de ordem de ligacao (estilo Antechamber/Wang&Case).
+        # So roda quando NAO ha ordens externas confiaveis (ex.: XYZ puro): nesse
+        # caso substitui o palpite geometrico (UFF) por uma atribuicao baseada
+        # em valencia + modelos de oxianion. Se o arquivo trouxe ordens
+        # (MOL2/pDynamo via external_orders), respeita-as.
+        if external_orders is None:
+            self._perceive_bond_orders()
 
+        self._build_bond_order_per_atom() # bachega 2026/Jun/24
+        self._detect_metal_bonds()
+
+
+    def _detect_metal_bonds(self):
+        """ Classifica as ligacoes em metalicas (>=1 metal) e covalentes,
+            preenchendo self.metal_bonds e self.covalent_bonds (arrays achatados,
+            mesmo formato de index_bonds). NAO altera index_bonds nem bonds: o
+            grafo permanece intacto; isto e so roteamento de visualizacao.
+
+            Em caso de falha (modulo ausente etc.), trata tudo como covalente
+            para nunca quebrar o carregamento.
+        """
+        try:
+            try:
+                from vismol.core.metal_bonds import split_metal_bonds
+            except Exception:
+                try:
+                    from core.metal_bonds import split_metal_bonds
+                except Exception:
+                    from metal_bonds import split_metal_bonds
+            symbols = [self.atoms[i].symbol for i in range(len(self.atoms))]
+            cov, met = split_metal_bonds(symbols, self.index_bonds)
+            self.covalent_bonds = cov
+            self.metal_bonds = met
+            if len(met):
+                logger.info("Ligacoes metalicas detectadas: %d", len(met) // 2)
+        except Exception as e:
+            logger.warning("Deteccao de ligacoes metalicas falhou (%s); "
+                           "tratando todas como covalentes." % e)
+            self.covalent_bonds = self.index_bonds
+            self.metal_bonds = np.array([], dtype=np.uint32)
+
+    def _perceive_bond_orders(self):
+        """ Preenche self.bond_order_list (alinhado a self.index_bonds) usando
+            percepcao robusta estilo Antechamber (modulo bond_order_perception).
+
+            Usado quando NAO ha ordens externas confiaveis (ex.: XYZ puro). Em
+            caso de qualquer falha (modulo ausente, elemento desconhecido, etc.)
+            mantem o bond_order_list atual e apenas avisa, para nunca quebrar o
+            carregamento da estrutura.
+        """
+        # Flag global: se multiple_bonds estiver desligada, nao percebe ordens
+        # (deixa tudo simples). Evita ate o custo de CPU do algoritmo.
+        try:
+            if not self.vm_config.gl_parameters.get("multiple_bonds", True):
+                return
+        except Exception:
+            pass
+        try:
+            from vismol.core.bond_order_perception import perceive_for_vismol
+        except Exception:
+            try:
+                from core.bond_order_perception import perceive_for_vismol
+            except Exception:
+                try:
+                    from bond_order_perception import perceive_for_vismol
+                except Exception as e:
+                    logger.warning("bond_order_perception indisponivel (%s); "
+                                   "mantendo ordens atuais." % e)
+                    return
+        try:
+            symbols = [self.atoms[i].symbol for i in range(len(self.atoms))]
+            orders = perceive_for_vismol(symbols, self.index_bonds)
+            self.bond_order_list = np.array(orders, dtype=np.uint32)
+        except Exception as e:
+            logger.warning("Falha na percepcao de ordem de ligacao (%s); "
+                           "mantendo ordens atuais." % e)
+
+    def _build_bond_order_per_atom(self):
+        """
+        Constrói self.bond_order_per_atom: um inteiro por átomo, alinhado com
+        self.frames[x] (mesma ordem das coordenadas). É ESSE array que vira VBO
+        e alimenta `vert_bond_order` nos shaders de sticks/linhas.
+
+        Regra: cada átomo recebe a maior ordem dentre os bonds em que aparece.
+        Átomos sem bond ficam com 1.
+        """
+        n_atoms = len(self.atoms)
+        order_per_atom = np.ones(n_atoms, dtype=np.int32)  # default = 1
+        if self.bond_order_list is None or self.index_bonds is None:
+            self.bond_order_per_atom = order_per_atom
+            return
+        for k, bond_order in enumerate(self.bond_order_list):
+            idx_i = int(self.index_bonds[2 * k])
+            idx_j = int(self.index_bonds[2 * k + 1])
+            o = int(bond_order)
+            if idx_i < n_atoms and o > order_per_atom[idx_i]:
+                order_per_atom[idx_i] = o
+            if idx_j < n_atoms and o > order_per_atom[idx_j]:
+                order_per_atom[idx_j] = o
+        self.bond_order_per_atom = order_per_atom
+
+    def get_bond(self, index_i, index_j):
+        """ Retorna o objeto Bond entre os atomos index_i e index_j em O(1),
+            ou None se nao houver ligacao. A ordem dos argumentos nao importa
+            (a chave e normalizada para (menor, maior)). """
+        if self.bonds is None:
+            return None
+        key = (index_i, index_j) if index_i <= index_j else (index_j, index_i)
+        return self.bonds.get(key)
 
     def _bonds_from_pair_of_indexes_list(self, exclude_list=[['H', 'H']],
                                          external_orders=None):
@@ -637,7 +812,7 @@ class VismolObject:
         Creates Bond objects based on pairs of indexes in self.index_bonds.
 
         self.index_bonds = [0,1 , 0,4 , 1,3 , ...]   (achatado, pares)
-        self.bonds       = [bond1(obj), bond2(obj), ...]
+        self.bonds       = {(i,j): bond, ...}  # dict, chave = par de indices
 
         external_orders (Convenção B):
             Lista de ordens de ligação alinhada APENAS aos bonds que
@@ -651,7 +826,7 @@ class VismolObject:
             bond.get_bond_order(), preservando o comportamento antigo.
         """
         assert self.bonds is None  # garante que a lista ainda não foi inicializada
-        self.bonds = []            # lista de objetos Bond
+        self.bonds = {}            # dict {(i,j): Bond}, chave = par normalizado
         self.bond_order_list = []  # ordem de cada bond (paralela a self.bonds)
         new_index_bonds = []
 
@@ -705,8 +880,10 @@ class VismolObject:
                 # Avança o contador só agora, após criar um bond válido.
                 bond_pair_idx += 1
 
-                # Registra o bond na lista geral
-                self.bonds.append(bond)
+                # Registra o bond no dict, chave = par de indices normalizado
+                # (menor, maior), para busca independente da ordem dos atomos.
+                bkey = (index_i, index_j) if index_i <= index_j else (index_j, index_i)
+                self.bonds[bkey] = bond
 
                 # Atualiza cada átomo com o bond do qual participa
                 self.atoms[index_i].bonds.append(bond)
@@ -719,6 +896,13 @@ class VismolObject:
         
         self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
         #self.bond_order_list = np.array(external_orders, dtype=np.uint32)
+        # Percepcao robusta quando nao ha ordens externas (ver metodo principal).
+        if external_orders is None:
+            self._perceive_bond_orders()
+        # Constroi o array de ordem-de-ligacao por atomo (alinhado com as
+        # coordenadas) usado pelo VBO 'vert_bond_order' nos sticks/lines.
+        self._build_bond_order_per_atom()
+        self._detect_metal_bonds()
         
         #print(self.index_bonds)
         #print(external_orders)
@@ -1030,54 +1214,6 @@ class VismolObject:
 
 
 
-# ============================================================================
-#  PARTE A — src/vismol/core/vismol_object.py
-#
-#  Problema: `bond_order_list` tem UM valor por aresta (por bond), mas o
-#  atributo de shader `vert_bond_order` é POR VÉRTICE (por átomo do par).
-#  Como o desenho é por índices (GL_LINES sobre index_bonds), precisamos de
-#  um array alinhado com as COORDENADAS dos átomos.
-#
-#  A forma mais segura é construir um array `bond_order_per_atom` do tamanho
-#  do nº de átomos: para cada bond, marcamos a ordem nos dois átomos. Em
-#  caso de um átomo participar de bonds de ordens diferentes (raro em lines,
-#  mas possível), fica a MAIOR ordem — escolha visual conservadora.
-#
-#  >>> Adicionar este método à classe VismolObject e chamá-lo no final de
-#      _bonds_from_pair_of_indexes_list() (logo após montar bond_order_list).
-# ============================================================================
-
-#   no final de _bonds_from_pair_of_indexes_list(), depois de:
-#       self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
-#   acrescentar:
-#       self._build_bond_order_per_atom()
-    def _build_bond_order_per_atom(self):
-        """
-        Constrói self.bond_order_per_atom: um inteiro por átomo, alinhado com
-        self.frames[x] (mesma ordem das coordenadas). É ESSE array que vira VBO
-        e alimenta `vert_bond_order` no shader de linhas.
-
-        Regra: cada átomo recebe a maior ordem dentre os bonds em que aparece.
-        Átomos sem bond ficam com 1 (não afeta nada, pois não são desenhados
-        como linha).
-        
-        # bachega 2026/Jun/24
-        """
-        n_atoms = len(self.atoms)
-        order_per_atom = np.ones(n_atoms, dtype=np.int32)  # default = 1
-
-        # self.index_bonds = [i0, j0, i1, j1, ...]  (pares)
-        # self.bond_order_list = [ord0, ord1, ...]  (um por par)
-        for k, bond_order in enumerate(self.bond_order_list):
-            idx_i = int(self.index_bonds[2 * k])
-            idx_j = int(self.index_bonds[2 * k + 1])
-            o = int(bond_order)
-            if o > order_per_atom[idx_i]:
-                order_per_atom[idx_i] = o
-            if o > order_per_atom[idx_j]:
-                order_per_atom[idx_j] = o
-
-        self.bond_order_per_atom = order_per_atom
 
 
 

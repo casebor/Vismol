@@ -74,6 +74,14 @@ class VismolGLCore:
         # driver/CPU work. This cache is invalidated whenever shaders are
         # (re)compiled - see create_gl_programs().
         self._uniform_loc_cache = {}
+        # Cache do ULTIMO valor enviado para cada (program, uniform_name).
+        # fog/light/antialias sao IDENTICOS para todos os objetos do frame e
+        # raramente mudam entre frames, mas antes eram re-enviados via
+        # glUniform* dentro de CADA draw_representation (dezenas de chamadas
+        # GL por objeto, todo frame). Aqui guardamos o valor ja residente no
+        # programa e so re-enviamos no diff. Invalidado em create_gl_programs
+        # (relink zera os uniforms no driver). Ver _uniform_changed().
+        self._uniform_value_cache = {}
         # --- Medidor de frame-time (Gargalo: instrumentacao) ---------------
         # Leve e opcional. Quando self.show_fps == True, render() acumula o
         # tempo de cada frame e imprime FPS medio + ms/frame a cada
@@ -1027,6 +1035,11 @@ class VismolGLCore:
         # Programs are about to be (re)linked, so any previously cached
         # uniform locations are no longer valid.
         self._uniform_loc_cache.clear()
+        # Relink reinicia todos os uniforms do programa para o default no
+        # driver, entao o cache de VALORES tambem precisa ser zerado: caso
+        # contrario acreditariamos que um valor antigo ainda esta residente
+        # e pulariamos o reenvio, deixando o shader com lixo.
+        self._uniform_value_cache.clear()
         self._compile_shader_picking_dots()
         self._compile_shader_freetype()
         for rep in self.representations_available:
@@ -1056,6 +1069,19 @@ class VismolGLCore:
         if geometry is not None:
             GL.glAttachShader(program, my_geometry_shader)
         GL.glLinkProgram(program)
+        # Checa o status do LINK. Sem isto, um programa que nao linka (ex.: GS
+        # excedendo GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS) e devolvido como
+        # objeto invalido e so estoura mais tarde, de forma confusa, num
+        # glUseProgram com GL_INVALID_OPERATION. Aqui o erro aparece na hora,
+        # com o info log do driver.
+        if GL.glGetProgramiv(program, GL.GL_LINK_STATUS) != GL.GL_TRUE:
+            info = GL.glGetProgramInfoLog(program)
+            try:
+                info = info.decode("utf-8", "replace")
+            except (AttributeError, UnicodeDecodeError):
+                pass
+            logger.critical("Shader program link FAILED:\n{}".format(info))
+            raise RuntimeError("Shader program link failed: {}".format(info))
         # Liga o bloco de camera (se o shader o declara) ao binding point
         # compartilhado. No-op para shaders ainda nao convertidos.
         self._bind_camera_ubo_to_program(program)
@@ -1441,7 +1467,73 @@ class VismolGLCore:
             self._uniform_loc_cache[key] = loc
         return loc
 
+    def _uniform_changed(self, program, name, value):
+        """ Decide se o uniform 'name' precisa ser reenviado ao 'program'.
+
+            Retorna (location, True) se o valor mudou (ou nunca foi enviado)
+            desde a ultima vez, registrando o novo valor no cache. Retorna
+            (location, False) se o valor identico ja esta residente no
+            programa -- nesse caso o chamador deve PULAR o glUniform*.
+
+            Motivacao (Gargalo: custo por-objeto): fog, luz e antialias sao
+            os mesmos para todos os objetos do frame e mudam raramente. Antes,
+            cada draw_representation reenviava todos eles incondicionalmente,
+            gerando dezenas de chamadas GL por objeto * N objetos por frame.
+            Com este diff, a partir do 2o objeto (e nos frames seguintes) o
+            valor ja esta no cache e nada e reenviado.
+
+            'value' precisa ser hashable de forma estavel. Escalares e tuplas
+            servem direto; arrays numpy sao convertidos pelo chamador via
+            _hashable() antes de chegar aqui.
+        """
+        loc = self._get_uniform_location(program, name)
+        if loc == -1:
+            # uniform inexistente/otimizado para fora: nada a enviar.
+            return loc, False
+        key = (program, name)
+        if self._uniform_value_cache.get(key) == value:
+            return loc, False
+        self._uniform_value_cache[key] = value
+        return loc, True
+
+    @staticmethod
+    def _hashable(arr):
+        """ Converte um valor de uniform (escalar np, lista, ndarray) numa
+            chave hashable e comparavel por igualdade para o cache. Mantem a
+            ordem dos componentes. """
+        try:
+            return tuple(np.asarray(arr, dtype=np.float32).ravel().tolist())
+        except (TypeError, ValueError):
+            return float(arr)
+
     def load_fog(self, program):
+        """ Load the fog parameters in the specified program
+            
+            fog_start -- The coordinates where the fog will begin (always
+                         positive)
+            fog_end -- The coordinates where the fog will begin (always positive
+                       and greater than fog_start)
+            fog_color -- The color for the fog (same as background)
+
+            NOTA (cache de uniforms): so reenvia cada parametro quando ele
+            muda em relacao ao ultimo valor residente no programa. Em regime
+            permanente (camera/fundo parados) isto vira tres lookups de dict
+            e zero chamadas GL.
+        """
+        val = self._hashable(self.glcamera.fog_start)
+        loc, changed = self._uniform_changed(program, "fog_start", val)
+        if changed:
+            GL.glUniform1fv(loc, 1, self.glcamera.fog_start)
+        val = self._hashable(self.glcamera.fog_end)
+        loc, changed = self._uniform_changed(program, "fog_end", val)
+        if changed:
+            GL.glUniform1fv(loc, 1, self.glcamera.fog_end)
+        val = self._hashable(self.bckgrnd_color)
+        loc, changed = self._uniform_changed(program, "fog_color", val)
+        if changed:
+            GL.glUniform4fv(loc, 1, self.bckgrnd_color)
+
+    def load_fog_legacy(self, program):
         """ Load the fog parameters in the specified program
             
             fog_start -- The coordinates where the fog will begin (always
@@ -1553,22 +1645,40 @@ class VismolGLCore:
     
     def load_lights(self, program):
         """ Function doc
+
+            Cache de uniforms: a posicao/intensidade da luz e constante entre
+            objetos e quase sempre entre frames, entao so reenviamos no diff.
         """
-        light_pos = self._get_uniform_location(program, "my_light.position")
-        GL.glUniform3fv(light_pos, 1, self.light_position)
-        amb_coef = self._get_uniform_location(program, "my_light.ambient_coef")
-        GL.glUniform1fv(amb_coef, 1, self.light_ambient_coef)
-        shiny = self._get_uniform_location(program, "my_light.shininess")
-        GL.glUniform1fv(shiny, 1, self.light_shininess)
-        intensity = self._get_uniform_location(program, "my_light.intensity")
-        GL.glUniform3fv(intensity, 1, self.light_intensity)
+        val = self._hashable(self.light_position)
+        loc, changed = self._uniform_changed(program, "my_light.position", val)
+        if changed:
+            GL.glUniform3fv(loc, 1, self.light_position)
+        val = self._hashable(self.light_ambient_coef)
+        loc, changed = self._uniform_changed(program, "my_light.ambient_coef", val)
+        if changed:
+            GL.glUniform1fv(loc, 1, self.light_ambient_coef)
+        val = self._hashable(self.light_shininess)
+        loc, changed = self._uniform_changed(program, "my_light.shininess", val)
+        if changed:
+            GL.glUniform1fv(loc, 1, self.light_shininess)
+        val = self._hashable(self.light_intensity)
+        loc, changed = self._uniform_changed(program, "my_light.intensity", val)
+        if changed:
+            GL.glUniform3fv(loc, 1, self.light_intensity)
     
     def load_antialias_params(self, program):
-        """ Function doc """
-        a_length = self._get_uniform_location(program, "antialias_length")
-        GL.glUniform1fv(a_length, 1, 0.05)
-        bck_col = self._get_uniform_location(program, "alias_color")
-        GL.glUniform3fv(bck_col, 1, self.bckgrnd_color[:3])
+        """ Function doc
+
+            Cache de uniforms: antialias_length e fixo e alias_color so muda
+            com o fundo; reenvio apenas no diff. """
+        val = self._hashable(0.05)
+        loc, changed = self._uniform_changed(program, "antialias_length", val)
+        if changed:
+            GL.glUniform1fv(loc, 1, 0.05)
+        val = self._hashable(self.bckgrnd_color[:3])
+        loc, changed = self._uniform_changed(program, "alias_color", val)
+        if changed:
+            GL.glUniform3fv(loc, 1, self.bckgrnd_color[:3])
     
     def _draw_labels(self):
         if self.vm_font.vao is None:
@@ -1932,9 +2042,11 @@ class VismolGLCore:
         """ Function doc """
         #sticks_type = self.vm_config.gl_parameters["ribbon_type"]
         sticks_type = self.vm_config.gl_parameters["sticks_type"]
+        sticks_type = 3
         self.shader_programs["ribbons"] = self.load_shaders(shaders_sticks.shader_type[sticks_type]["vertex_shader"],
                                                    shaders_sticks.shader_type[sticks_type]["fragment_shader"],
                                                    shaders_sticks.shader_type[sticks_type]["geometry_shader"])
+        
         self.shader_programs["ribbons_sel"] = self.load_shaders(shaders_sticks.shader_type[sticks_type]["sel_vertex_shader"],
                                                        shaders_sticks.shader_type[sticks_type]["sel_fragment_shader"],
                                                        shaders_sticks.shader_type[sticks_type]["sel_geometry_shader"])
