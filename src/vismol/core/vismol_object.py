@@ -717,6 +717,7 @@ class VismolObject:
             Em caso de falha (modulo ausente etc.), trata tudo como covalente
             para nunca quebrar o carregamento.
         """
+        
         try:
             try:
                 from vismol.core.metal_bonds import split_metal_bonds
@@ -902,7 +903,13 @@ class VismolObject:
         # Constroi o array de ordem-de-ligacao por atomo (alinhado com as
         # coordenadas) usado pelo VBO 'vert_bond_order' nos sticks/lines.
         self._build_bond_order_per_atom()
-        self._detect_metal_bonds()
+        
+        
+        
+        '''----------------------------------------------------------'''
+        #self._detect_metal_bonds()
+        '''----------------------------------------------------------'''
+        
         
         #print(self.index_bonds)
         #print(external_orders)
