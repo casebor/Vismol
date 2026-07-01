@@ -230,12 +230,16 @@ class Representation:
             GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.sel_ind_vbo)
             GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, self.indexes.nbytes, self.indexes, GL.GL_DYNAMIC_DRAW)
     
-    def _load_color_vbo(self, colors):
+    def _load_color_vbo(self, colors = None):
         """ This function assigns the colors to
             be drawn by the function  draw_representation"""
+        
+        if colors is None:
+            colors = self.colors
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.col_vbo)
         GL.glBufferData(GL.GL_ARRAY_BUFFER, colors.nbytes, colors, GL.GL_STATIC_DRAW)
-    
+
+            
     def _enable_anti_alias_to_lines(self):
         """ Function doc """
         GL.glEnable(GL.GL_DEPTH_TEST)
@@ -259,10 +263,17 @@ class Representation:
 class PickingDotsRepresentation(Representation):
     """ Class doc """
     
-    def __init__(self, vismol_object, vismol_glcore, indexes=None, active=True):
+    #def __init__(self, vismol_object, vismol_glcore, indexes=None, active=True, colors = None):
+    def __init__(self, vismol_object, vismol_glcore, indexes=None, active=True, colors = None):
         """ Class initialiser """
-        super(PickingDotsRepresentation, self).__init__(vismol_object, vismol_glcore, "picking_dots", active, indexes)
-    
+        super(PickingDotsRepresentation, self).__init__(vismol_object, vismol_glcore, "picking_dots", active, indexes, colors)
+        
+        if colors:
+            self.colors = colors
+        else:
+            self.colors = self.vm_session.vm_config.gl_parameters["picking_dots_color"]
+        #print(self.colors)
+        
     def _check_vao_and_vbos(self):
         self.shader_program = self.vm_glcore.core_shader_programs[self.name]
         if self.vao is None:
@@ -274,7 +285,9 @@ class PickingDotsRepresentation(Representation):
         self.vao = self._make_gl_vao()
         self.ind_vbo = self._make_gl_index_buffer(self.indexes)
         self.coord_vbo = self._make_gl_coord_buffer(self.vm_object.frames[0], self.shader_program)
-        colors = self.vm_session.vm_config.gl_parameters["picking_dots_color"] * self.vm_object.frames.shape[1]
+        #colors = self.vm_session.vm_config.gl_parameters["picking_dots_color"] * self.vm_object.frames.shape[1]
+        colors = self.colors * self.vm_object.frames.shape[1]
+        
         colors = np.array(colors, dtype=np.float32).reshape([self.vm_object.frames.shape[1], 3])
         self.col_vbo = self._make_gl_color_buffer(colors, self.shader_program)
     
@@ -325,6 +338,97 @@ class PickingDotsRepresentation(Representation):
         pass
 
 
+class OneColorDotsRepresentation(Representation):
+    """ Class doc """
+    
+    def __init__(self, vismol_object, vismol_glcore, indexes, active=True, rgb=None):
+        """ Class initialiser """
+        super(OneColorDotsRepresentation, self).__init__(
+            vismol_object,
+            vismol_glcore,
+            "dots",
+            active,
+            indexes
+        )
+
+        self.rgb = rgb
+        
+        # Se RGB foi fornecido, sobrescreve as cores
+        if rgb is not None:
+            self._set_uniform_color(rgb)
+
+    def _set_uniform_color(self, rgb):
+        """
+        rgb deve ser tupla/lista (R,G,B)
+        Aceita valores em [0,255] ou [0,1]
+        """
+        rgb = np.array(rgb, dtype=np.float32)
+
+        # Normaliza se necessário
+        if np.any(rgb > 1.0):
+            rgb /= 255.0
+
+        n_points = len(self.indexes)
+
+        # Repete RGB para todos os pontos
+        self.colors = np.tile(rgb, (n_points, 1)).astype(np.float32)
+
+        self.was_col_modified = True
+
+    def draw_representation(self):
+        """ Function doc """
+        self._check_vao_and_vbos()
+        self._enable_anti_alias_to_lines()
+        _size = self.vm_glcore.vm_config.gl_parameters["dots_size"]
+        _height = self.vm_glcore.height
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_VERTEX_PROGRAM_POINT_SIZE)
+        GL.glUseProgram(self.shader_program)
+        GL.glPointSize(
+            _size * _height /
+            (abs(self.vm_glcore.dist_cam_zrp)) / 2
+        )
+
+        self.vm_glcore.load_matrices(
+            self.shader_program,
+            self.vm_object.model_mat
+        )
+        self.vm_glcore.load_fog(self.shader_program)
+        self.vm_glcore.load_lights(self.shader_program)
+        GL.glBindVertexArray(self.vao)
+
+        if self.was_rep_coord_modified:
+            self._load_coord_vbo(coord_vbo=True)
+            self.was_rep_coord_modified = False
+
+        if self.was_rep_ind_modified:
+            self._load_ind_vbo(ind_vbo=True)
+            self.was_rep_ind_modified = False
+
+        if self.was_col_modified:
+            self._load_color_vbo(None)
+            self.was_col_modified = False
+
+        GL.glDrawElements(
+            GL.GL_POINTS,
+            self.elements,
+            GL.GL_UNSIGNED_INT,
+            None
+        )
+
+        GL.glBindVertexArray(0)
+        self._disable_anti_alias_to_lines()
+        GL.glDisable(GL.GL_VERTEX_PROGRAM_POINT_SIZE)
+        GL.glPointSize(1)
+        GL.glUseProgram(0)
+        
+        
+    def draw_background_sel_representation (self):
+        """ Function doc """
+        pass
+    
+    
+    
 class DotsRepresentation(Representation):
     """ Class doc """
     
