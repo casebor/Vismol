@@ -361,6 +361,16 @@ class OneColorDotsRepresentation(Representation):
         """
         rgb deve ser tupla/lista (R,G,B)
         Aceita valores em [0,255] ou [0,1]
+
+        IMPORTANTE: o desenho e feito por indices (glDrawElements) sobre o
+        array de coordenadas COMPLETO do objeto (self.vm_object.frames[0]),
+        exatamente como coord_vbo/ind_vbo sao montados na classe base. Logo
+        o buffer de cor precisa ter uma entrada POR ATOMO DO OBJETO (mesmo
+        tamanho de vm_object.frames[0]/vm_object.colors), e nao apenas
+        len(self.indexes) entradas -- caso contrario self.indexes (que
+        contem os IDs reais dos atomos, normalmente >> numero de restricoes)
+        acessa fora dos limites do buffer, gerando cores inconsistentes/
+        indefinidas dependendo do driver/GPU.
         """
         rgb = np.array(rgb, dtype=np.float32)
 
@@ -368,19 +378,34 @@ class OneColorDotsRepresentation(Representation):
         if np.any(rgb > 1.0):
             rgb /= 255.0
 
-        n_points = len(self.indexes)
+        n_atoms = self.vm_object.frames[0].shape[0]
 
-        # Repete RGB para todos os pontos
-        self.colors = np.tile(rgb, (n_points, 1)).astype(np.float32)
+        # Repete RGB para TODOS os atomos do objeto (nao so os N pontos
+        # restringidos), para casar com o dimensionamento de coord_vbo.
+        self.colors = np.tile(rgb, (n_atoms, 1)).astype(np.float32)
 
         self.was_col_modified = True
-    
-    #def _make_gl_sel_representation_vao_and_vbos(self):
-    #    """ Function doc """
-    #    return False
-    #def _load_color_vbo(self, color):
-    #    """ Function doc """
-    #    return False
+
+    def _make_gl_representation_vao_and_vbos(self):
+        """ Sobrescreve a versao da classe base para nao usar
+        vm_object.colors (cores por-atomo/por-elemento) quando uma cor
+        uniforme foi definida. Sem este override, a primeira criacao do
+        VAO usaria as cores normais dos atomos ate was_col_modified
+        disparar uma recarga -- ou seja, o primeiro frame desenhado
+        ficaria com a cor errada. """
+        logger.debug("building '{}' representation VAO and VBOs".format(self.name))
+        self.vao = self._make_gl_vao()
+        self.ind_vbo = self._make_gl_index_buffer(self.indexes)
+        self.coord_vbo = self._make_gl_coord_buffer(self.vm_object.frames[0], self.shader_program)
+
+        if self.rgb is None:
+            # Nenhuma cor uniforme foi passada: cai para o comportamento
+            # padrao (cor por atomo), igual a classe base.
+            self.col_vbo = self._make_gl_color_buffer(self.vm_object.colors, self.shader_program)
+        else:
+            # self.colors ja foi montado em _set_uniform_color com o
+            # tamanho correto (n_atoms), entao so precisa subir pra GPU.
+            self.col_vbo = self._make_gl_color_buffer(self.colors, self.shader_program)
     
     def draw_representation(self):
         """ Function doc """
