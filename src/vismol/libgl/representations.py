@@ -44,7 +44,15 @@ class Representation:
         self.elements = np.uint32(self.indexes.shape[0])
         
         self.is_dynamic = is_dynamic
-        
+
+        # Marca se esta representacao usa uma cor UNIFORME/fixa (nao
+        # segue vobject.colors, o array de cores por-atomo do objeto).
+        # Codigo generico que reaplica cores por atomo em todas as
+        # representacoes de um vobject (ex: set_color_by_index em
+        # eSession.py) deve checar essa flag e pular representacoes
+        # marcadas, ou vai sobrescrever a cor fixa delas.
+        self.uses_uniform_color = False
+
         self.was_rep_modified = False
         self.was_sel_modified = False
         self.was_col_modified = False
@@ -352,10 +360,15 @@ class OneColorDotsRepresentation(Representation):
         )
 
         self.rgb = rgb
-        
-        # Se RGB foi fornecido, sobrescreve as cores
+
+        # Se RGB foi fornecido, sobrescreve as cores e marca a
+        # representacao como "cor fixa" (ver uses_uniform_color na
+        # classe base) -- assim codigo generico de recoloracao por
+        # atomo (ex: set_color_by_index) sabe que deve pular esta
+        # representacao ao invés de sobrescrever sua cor.
         if rgb is not None:
             self._set_uniform_color(rgb)
+            self.uses_uniform_color = True
 
     def _set_uniform_color(self, rgb):
         """
