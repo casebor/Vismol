@@ -233,7 +233,6 @@ class Representation:
     def _load_color_vbo(self, colors = None):
         """ This function assigns the colors to
             be drawn by the function  draw_representation"""
-        
         if colors is None:
             colors = self.colors
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.col_vbo)
@@ -346,7 +345,8 @@ class OneColorDotsRepresentation(Representation):
         super(OneColorDotsRepresentation, self).__init__(
             vismol_object,
             vismol_glcore,
-            "dots",
+            #"dots",
+            'posdot_type',
             active,
             indexes
         )
@@ -374,7 +374,14 @@ class OneColorDotsRepresentation(Representation):
         self.colors = np.tile(rgb, (n_points, 1)).astype(np.float32)
 
         self.was_col_modified = True
-
+    
+    #def _make_gl_sel_representation_vao_and_vbos(self):
+    #    """ Function doc """
+    #    return False
+    #def _load_color_vbo(self, color):
+    #    """ Function doc """
+    #    return False
+    
     def draw_representation(self):
         """ Function doc """
         self._check_vao_and_vbos()

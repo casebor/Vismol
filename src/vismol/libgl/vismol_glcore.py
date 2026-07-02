@@ -2000,6 +2000,14 @@ class VismolGLCore:
         self.shader_programs["dots_sel"] = self.load_shaders(shaders_dots.shader_type[dot_type]["sel_vertex_shader"],
                                                     shaders_dots.shader_type[dot_type]["sel_fragment_shader"])
     
+    def _compile_shader_posdot_type(self):
+        """ Function doc """
+        dot_type = 1 #self.vm_config.gl_parameters["posdot_type"]
+        self.shader_programs["posdot_type"] = self.load_shaders(shaders_dots.shader_type[dot_type]["vertex_shader"],
+                                                shaders_dots.shader_type[dot_type]["fragment_shader"])
+        self.shader_programs["posdot_type_sel"] = self.load_shaders(shaders_dots.shader_type[dot_type]["sel_vertex_shader"],
+                                                    shaders_dots.shader_type[dot_type]["sel_fragment_shader"])
+    
     def _compile_shader_lines(self):
         """ Function doc """
         line_type = self.vm_config.gl_parameters["line_type"]

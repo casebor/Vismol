@@ -22,6 +22,12 @@
 #  
 #  
 
+
+
+
+
+
+
 vertex_shader_dot_simple = """
 # version 330
 
@@ -66,6 +72,10 @@ void main(){
     }
 }
 """
+
+
+
+
 
 sel_fragment_shader_dot_simple = """
 # version 330
@@ -282,6 +292,59 @@ void main(){
 """
 
 
+
+
+
+
+
+
+vertex_shader_posdot_simple = """
+# version 330
+
+layout(std140) uniform CameraMatrices {
+    mat4 view_mat;
+    mat4 proj_mat;
+};
+
+uniform mat4 model_mat;
+
+in vec3 vert_coord;
+in vec3 vert_color;
+out vec3 frag_coord;
+out vec3 frag_color;
+
+void main(){
+    gl_Position = proj_mat * view_mat * model_mat * vec4(vert_coord, 1.0);
+    frag_coord = (view_mat * model_mat * vec4(vert_coord, 1.0)).xyz;
+    frag_color = vert_color;
+    //frag_color = vec3(1.0, 0.0, 1.0);
+}
+"""
+
+fragment_shader_posdot_simple = """
+#version 330
+
+uniform vec4 fog_color;
+uniform float fog_start;
+uniform float fog_end;
+
+in vec3 frag_coord;
+in vec3 frag_color;
+out vec4 final_color;
+
+void main(){
+    final_color = vec4(1.0, 0.0, 1.0, 1.0); // roxo/magenta
+}
+"""
+
+
+
+
+
+
+
+
+
 shader_type = {0: { "vertex_shader"      : vertex_shader_dot_simple,
                     "fragment_shader"    : fragment_shader_dot_simple,
                     "sel_vertex_shader"  : vertex_shader_dot_simple,
@@ -301,5 +364,10 @@ shader_type = {0: { "vertex_shader"      : vertex_shader_dot_simple,
                    "fragment_shader"    : fragment_shader_dot_extra,
                    "sel_vertex_shader"  : vertex_shader_dot_extra,
                    "sel_fragment_shader": sel_fragment_shader_dot_extra
+                   },
+               4: {"vertex_shader"      : vertex_shader_posdot_simple,
+                   "fragment_shader"    : fragment_shader_posdot_simple,
+                   "sel_vertex_shader"  : vertex_shader_posdot_simple,
+                   "sel_fragment_shader": fragment_shader_posdot_simple
                    },
 }
