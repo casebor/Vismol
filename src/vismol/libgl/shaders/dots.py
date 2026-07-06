@@ -98,6 +98,7 @@ layout(std140) uniform CameraMatrices {
 };
 
 uniform mat4 model_mat;
+uniform float point_size;
 
 in vec3 vert_coord;
 in vec3 vert_color;
@@ -106,6 +107,16 @@ out vec3 frag_color;
 
 void main(){
     gl_Position = proj_mat * view_mat * model_mat * vec4(vert_coord, 1.0);
+    // NOTA: com GL_VERTEX_PROGRAM_POINT_SIZE habilitado (necessario para
+    // usar gl_PointCoord no fragment shader), o glPointSize() do lado
+    // Python e IGNORADO pela especificacao OpenGL - o tamanho do ponto
+    // so pode vir daqui. Sem essa linha, o tamanho fica indefinido pelo
+    // driver: alguns (NVIDIA) mostram algo visivel por sorte, outros
+    // (Mesa/Intel) renderizam tamanho efetivamente zero (invisivel, sem
+    // erro nenhum). Ver representations.py: point_size e enviado via
+    // glUniform1f a cada draw, com o mesmo calculo que antes ia so pro
+    // glPointSize.
+    gl_PointSize = point_size;
     frag_coord = (view_mat * model_mat * vec4(vert_coord, 1.0)).xyz;
     frag_color = vert_color;
 }

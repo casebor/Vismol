@@ -447,10 +447,18 @@ class OneColorDotsRepresentation(Representation):
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_VERTEX_PROGRAM_POINT_SIZE)
         GL.glUseProgram(self.shader_program)
-        GL.glPointSize(
-            _size * _height /
-            (abs(self.vm_glcore.dist_cam_zrp)) / 2
+        point_size = _size * _height / (abs(self.vm_glcore.dist_cam_zrp)) / 2
+        GL.glPointSize(point_size)
+        # Fix: com GL_VERTEX_PROGRAM_POINT_SIZE habilitado, o glPointSize()
+        # acima e ignorado pela especificacao OpenGL - o tamanho real do
+        # ponto so vem do gl_PointSize escrito no vertex shader (ver
+        # shaders/dots.py). Sem enviar esse uniform, o tamanho fica
+        # indefinido pelo driver: em GPUs Intel/Mesa os dots ficavam
+        # invisiveis (tamanho efetivamente zero), sem gerar nenhum erro.
+        point_size_loc = self.vm_glcore._get_uniform_location(
+            self.shader_program, "point_size"
         )
+        GL.glUniform1f(point_size_loc, point_size)
 
         self.vm_glcore.load_matrices(
             self.shader_program,
