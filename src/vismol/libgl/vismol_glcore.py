@@ -2129,21 +2129,14 @@ class VismolGLCore:
     
     def _compile_shader_surface(self):
         """ Function doc """
-        #self.shader_programs["surface"] = self.load_shaders(shaders_surface.vertex_shader_surface,
-        #                                            shaders_surface.fragment_shader_surface,
-        #                                            shaders_surface.geometry_shader_surface)
-        
-        '''
-        self.shader_programs["surface"] = self.load_shaders(shaders_surface.vertex_shader_lines,
-                                                    shaders_surface.fragment_shader_lines,
-                                                    shaders_surface.geometry_shader_lines)
-        self.shader_programs["surface_sel"] = self.load_shaders(shaders_spheres.vertex_shader_spheres,
-                                                        shaders_spheres.fragment_shader_spheres)
-        #'''
-        
-        self.shader_programs["surface"] = self.load_shaders(shaders_surface.vertex_shader_lines,
-                                                    shaders_surface.fragment_shader_lines,
-                                                    shaders_surface.geometry_shader_lines)
+        # Switched from the "lines" (wireframe) shader pair to the real
+        # triangle + Phong "surface" shader pair. See geometry_shader_surface
+        # in shaders/surface.py: it now derives a flat per-face normal from
+        # the triangle's own edges instead of relying on a "vert_normal"
+        # vertex attribute the VAO never populated.
+        self.shader_programs["surface"] = self.load_shaders(shaders_surface.vertex_shader_surface,
+                                                    shaders_surface.fragment_shader_surface,
+                                                    shaders_surface.geometry_shader_surface)
         self.shader_programs["surface_sel"] = self.load_shaders(shaders_spheres.vertex_shader_spheres,
                                                         shaders_spheres.fragment_shader_spheres)
     

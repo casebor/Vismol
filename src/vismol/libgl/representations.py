@@ -40,6 +40,24 @@ class Representation:
         self.vm_glcore = vismol_glcore
         self.name = name
         self.active = active
+        # indexes pode chegar como None (ex: build_core_representations() em
+        # vismol_object.py passa indexes=self.index_bonds pra
+        # DashedLinesRepresentation, e index_bonds e None por padrao pra
+        # objetos sem atomos/ligacoes -- como os VismolObject "so-superficie"
+        # criados em surface_analysis_window.py pra orbital/potential/
+        # density/MEP/external cube. np.array(None, dtype=uint32) da
+        # TypeError em vez de um array vazio, entao tratamos isso aqui em
+        # vez de em cada chamador individualmente.
+        # [EN] indexes may arrive as None here (e.g. build_core_representations()
+        # in vismol_object.py passes indexes=self.index_bonds to
+        # DashedLinesRepresentation, and index_bonds defaults to None for
+        # objects with no atoms/bonds -- such as the surface-only VismolObject
+        # instances created in surface_analysis_window.py for orbital/potential/
+        # density/MEP/external-cube surfaces). np.array(None, dtype=uint32)
+        # raises TypeError instead of producing an empty array, so it is
+        # normalised here once, rather than at every call site.
+        if indexes is None:
+            indexes = []
         self.indexes = np.array(indexes, dtype=np.uint32)
         self.elements = np.uint32(self.indexes.shape[0])
         
@@ -1810,6 +1828,32 @@ class SurfaceRepresentation(Representation):
         self.name      =  name   
         self.vismol_object = vismol_object
         self.surf_name     = surface_name
+        # "surface" (malha preenchida, GL_FILL) ou "lines" (wireframe, GL_LINE).
+        # Ambos usam o MESMO shader de triangulos/VAO -- so muda como o
+        # rasterizador desenha os triangulos (glPolygonMode), entao nao ha
+        # necessidade de manter um shader/VAO separado so para o wireframe.
+        self.render_mode = "surface"
+        self.alpha = 1.0   # 1.0 = opaco, 0.0 = totalmente transparente
+        self.smooth_shading = False   # False = flat (normal por face), True = smooth (normal por vertice)
+
+    def set_render_mode(self, mode):
+        """ mode: 'surface' (preenchido) ou 'lines' (wireframe) """
+        if mode not in ("surface", "lines"):
+            raise ValueError("render_mode deve ser 'surface' ou 'lines', recebido: {}".format(mode))
+        self.render_mode = mode
+
+    def set_alpha(self, alpha):
+        """ alpha: 0.0 (totalmente transparente) a 1.0 (opaco) """
+        self.alpha = max ( 0.0, min ( 1.0, float ( alpha ) ) )
+
+    def set_shading_mode(self, mode):
+        """ mode: 'flat' (normal constante por face -- mostra as facetas
+        do marching cubes) ou 'smooth' (normal interpolada por vertice,
+        media das faces adjacentes -- ver compute_smooth_normals em
+        surface_analysis_window.py). """
+        if mode not in ("flat", "smooth"):
+            raise ValueError("shading mode deve ser 'flat' ou 'smooth', recebido: {}".format(mode))
+        self.smooth_shading = ( mode == "smooth" )
 
     def _make_gl_representation_vao_and_vbos(self, debug = False):
         """ Function doc """
@@ -1818,8 +1862,33 @@ class SurfaceRepresentation(Representation):
         self.vao       = self._make_gl_vao()
         self.ind_vbo   = self._make_gl_index_buffer(self.indexes)
         self.coord_vbo = self._make_gl_coord_buffer(self.vertices, self.shader_program)
-        #self.col_vbo   = self._make_gl_color_buffer(np.zeros(3, dtype=np.float32), self.shader_program, instances=True)
-        self.col_vbo   = self._make_gl_color_buffer(self.colors, self.shader_program, instances=True)
+        # instances=True estava ligado aqui, mas draw_representation() usa
+        # glDrawElements normal (nao instanciado) -- com o divisor de
+        # atributo ligado, a GPU sempre lia colors[0] pra malha inteira,
+        # nao a cor de cada vertice. Passava despercebido porque orbital/
+        # potential/density usam uma cor uniforme (todo vertice igual);
+        # quebrou visivelmente com o MEP, que tem cor diferente por vertice.
+        self.col_vbo   = self._make_gl_color_buffer(self.colors, self.shader_program)
+        self.norm_vbo  = self._make_gl_normal_buffer(self.normals, self.shader_program)
+
+    def _make_gl_normal_buffer(self, normals, program):
+        """ Buffer de normais por vertice, pro atributo 'vert_normal' que o
+        vertex_shader_surface ja declarava mas nunca tinha dado real
+        associado (normal ficava sempre (0,0,0) por padrao do OpenGL). """
+        norm_vbo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, norm_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, normals.nbytes, normals, GL.GL_STATIC_DRAW)
+        att_normal = GL.glGetAttribLocation(program, "vert_normal")
+        GL.glEnableVertexAttribArray(att_normal)
+        GL.glVertexAttribPointer(att_normal, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*normals.itemsize, ctypes.c_void_p(0))
+        return norm_vbo
+
+    def _load_normal_vbo(self, normals):
+        """ Reenvia as normais a cada frame, igual _load_color_vbo faz
+        com as cores (a malha pode mudar de frame pra frame numa
+        trajetoria). """
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.norm_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, normals.nbytes, normals, GL.GL_STATIC_DRAW)
     
     def _load_coord_vbo(self, coord_vbo=False, vertices = None):
         """ This function assigns the coordinates to 
@@ -1848,7 +1917,7 @@ class SurfaceRepresentation(Representation):
     def draw_representation(self):
         """ Function doc """
         frame_coords, frame = self.vm_glcore._safe_frame_coords(self.vismol_object)
-        self.vertices, self.colors, self.indexes = self.vismol_object.surface_trajectory[frame][self.surf_name]
+        self.vertices, self.colors, self.indexes, self.normals = self.vismol_object.surface_trajectory[frame][self.surf_name]
         
         self._check_vao_and_vbos()
         GL.glEnable(GL.GL_DEPTH_TEST)
@@ -1857,6 +1926,16 @@ class SurfaceRepresentation(Representation):
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
         GL.glEnable(GL.GL_BLEND)
         GL.glUseProgram(self.shader_program)
+        alpha_loc = GL.glGetUniformLocation(self.shader_program, "surf_alpha")
+        GL.glUniform1f(alpha_loc, self.alpha)
+        smooth_loc = GL.glGetUniformLocation(self.shader_program, "smooth_shading")
+        GL.glUniform1i(smooth_loc, 1 if self.smooth_shading else 0)
+        if self.alpha < 1.0:
+            # com transparencia, desliga escrita no depth buffer (mas mantem
+            # o teste de depth ligado) -- evita que a propria superficie se
+            # auto-oclua de forma esquisita (frente vs fundo da mesma malha),
+            # sem afetar como ela interage com objetos opacos na cena.
+            GL.glDepthMask(GL.GL_FALSE)
         self.vm_glcore.load_matrices(self.shader_program, self.vm_object.model_mat)
         self.vm_glcore.load_lights(self.shader_program)
         self.vm_glcore.load_fog(self.shader_program)
@@ -1868,6 +1947,7 @@ class SurfaceRepresentation(Representation):
         self._load_coord_vbo( coord_vbo=True, vertices = self.vertices)
         self._load_ind_vbo  ( ind_vbo = True, indexes = self.indexes)
         self._load_color_vbo( self.colors)
+        self._load_normal_vbo( self.normals)
         
         #if self.was_rep_coord_modified or self.was_rep_ind_modified:
         #    coords, colors, rads = self._coords_colors_rads()
@@ -1882,9 +1962,17 @@ class SurfaceRepresentation(Representation):
         #    self.was_rep_ind_modified = False
         
         #GL.glDrawElementsInstanced(GL.GL_TRIANGLES, self.instances_elemns, GL.GL_UNSIGNED_INT, None, self.elements)
-        GL.glDrawElements(GL.GL_LINES, int(len(self.indexes)), GL.GL_UNSIGNED_INT, None)
-        #GL.glDrawElements(GL.GL_TRIANGLES, int(len(self.indexes)), GL.GL_UNSIGNED_INT, None)
-        #GL.glDrawElements(GL.GL_TRIANGLE_STRIP, int(len(self.indexes)), GL.GL_UNSIGNED_INT, None)
+        if self.render_mode == "lines":
+            GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_LINE)
+        else:
+            GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
+        GL.glDrawElements(GL.GL_TRIANGLES, int(len(self.indexes)), GL.GL_UNSIGNED_INT, None)
+        # sempre restaura GL_FILL: glPolygonMode e estado global do OpenGL,
+        # se nao resetar aqui, a proxima representacao desenhada (sticks,
+        # cartoon, etc) tambem sairia em wireframe sem querer.
+        GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
+        if self.alpha < 1.0:
+            GL.glDepthMask(GL.GL_TRUE)   # restaura -- estado global do OpenGL
         GL.glBindVertexArray(0)
         GL.glUseProgram(0)
         GL.glDisable(GL.GL_CULL_FACE)

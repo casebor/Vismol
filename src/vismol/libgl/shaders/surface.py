@@ -23,7 +23,13 @@ out vec4 geom_coord;
 
 void main(){
     geom_color = vert_color;
-    geom_normal = vert_normal;
+    // transforma a normal pro mesmo espaco (view space) que geom_coord ja
+    // usa -- consistente com o norm_vec plano calculado no geometry
+    // shader a partir das arestas de geom_coord (tambem em view space).
+    // mat3() descarta a translacao; assume-se transformacao rigida
+    // (rotacao + translacao, sem escala nao-uniforme), que e o caso de
+    // model_mat neste visualizador.
+    geom_normal = mat3(view_mat * model_mat) * vert_normal;
     geom_coord = view_mat * model_mat * vec4(vert_coord, 1.0);
 }
 
@@ -45,6 +51,7 @@ in vec3 geom_color[];
 in vec3 geom_normal[];
 in vec4 geom_coord[];
 
+uniform int smooth_shading;
 
 out vec3 frag_coord;
 out vec3 frag_color;
@@ -55,23 +62,34 @@ void main(){
     vec3 vec_p0_p2 = geom_coord[2].xyz - geom_coord[0].xyz;
     vec3 norm_vec = cross(vec_p0_p1, vec_p0_p2);
     norm_vec = normalize(norm_vec);
-    
+
+    // smooth_shading == 0 (default): flat shading, usa norm_vec (normal
+    // de face constante pro triangulo inteiro, calculada acima a partir
+    // das proprias arestas) -- mostra as facetas do marching cubes.
+    // smooth_shading != 0: usa geom_normal[i], a normal por vertice
+    // (media das faces adjacentes, ver compute_smooth_normals em
+    // surface_analysis_window.py) interpolada pelo rasterizador --
+    // shading suave, sem facetas aparentes.
+    vec3 n0 = (smooth_shading != 0) ? normalize(geom_normal[0]) : norm_vec;
+    vec3 n1 = (smooth_shading != 0) ? normalize(geom_normal[1]) : norm_vec;
+    vec3 n2 = (smooth_shading != 0) ? normalize(geom_normal[2]) : norm_vec;
+
     gl_Position = proj_mat * geom_coord[0];
     frag_coord  = geom_coord[0].xyz;
     frag_color  = geom_color[0];
-    frag_norm   = geom_normal[0];
+    frag_norm   = n0;
     EmitVertex();
     
     gl_Position = proj_mat * geom_coord[1];
     frag_coord  = geom_coord[1].xyz;
     frag_color  = geom_color[1];
-    frag_norm   = geom_normal[1];
+    frag_norm   = n1;
     EmitVertex();
     
     gl_Position = proj_mat * geom_coord[2];
     frag_coord  = geom_coord[2].xyz;
     frag_color  = geom_color[2];
-    frag_norm   = geom_normal[2];
+    frag_norm   = n2;
     EmitVertex();
     
     EndPrimitive();
@@ -92,6 +110,7 @@ struct Light {
 };
 
 uniform Light my_light;
+uniform float surf_alpha;
 
 uniform vec4 fog_color;
 uniform float fog_start;
@@ -121,7 +140,7 @@ void main(){
         specular_coef = pow(max(0.0, dot(vert_to_cam, reflect(vert_to_light, normal))), my_light.shininess);
     vec3 specular = specular_coef * my_light.intensity;
     specular = specular * (vec3(1) - diffuse);
-    vec4 my_color = vec4(ambient + diffuse + specular, 1.0);
+    vec4 my_color = vec4(ambient + diffuse + specular, surf_alpha);
     
     float dist = abs(frag_coord.z);
     if(dist>=fog_start){
