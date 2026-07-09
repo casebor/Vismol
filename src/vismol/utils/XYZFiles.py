@@ -7,8 +7,12 @@ import time
 import multiprocessing
 import numpy as np
 from vismol.core.vismol_object import VismolObject
-
-
+from vismol.core.vismol_object import VismolObject
+from vismol.model.chain  import *
+from vismol.model.atom  import *
+from vismol.model.residue  import *
+#from logger import logger 
+ 
 def load_xyz_file(infile=None, vismol_session=None, gridsize=3):
     """ Function doc """
     print ("\nstarting: parse_mol2")
@@ -73,10 +77,69 @@ def load_xyz_file(infile=None, vismol_session=None, gridsize=3):
     name = os.path.basename(infile)
     #print (atoms)
     #print (frames)
-    vismol_object  = VismolObject.VismolObject(name        = name, 
-                                               atoms       = atoms, 
-                                               vismol_session   = vismol_session, 
-                                               trajectory  = frames)
+    
+    vm_object  = VismolObject( vismol_session   = vismol_session)
+    #print(atoms)
+    atom_id = 0
+    for _atom in atoms:
+        # Ensure chain exists in the VismolObject
+        if _atom["chain"] not in vm_object.chains.keys():
+            vm_object.chains[_atom["chain"]] = Chain(vm_object, name=_atom["chain"])
+        _chain = vm_object.chains[_atom["chain"]]
+
+        # Ensure residue exists inside the chain
+        if _atom["resi"] not in _chain.residues.keys():
+            _r = Residue(
+                vm_object,
+                name=_atom["resn"],
+                index=_atom["resi"],
+                chain=_chain
+            )
+            _chain.residues[_atom["resi"]] = _r
+
+        _residue = _chain.residues[_atom["resi"]]
+
+        # Create the Atom object inside the VismolObject
+        atom = Atom(
+            vismol_object=vm_object,
+            name=_atom["name"],
+            index=_atom["index"],
+            symbol=_atom["symbol"],
+            residue=_residue,
+            chain=_chain,
+            atom_id=atom_id,
+            occupancy=_atom["occupancy"],
+            bfactor=_atom["bfactor"],
+            charge=_atom["charge"]
+        )
+
+        # Assign unique identifiers and update dictionaries
+        atom.unique_id =  vismol_session.atom_id_counter
+        atom._generate_atom_unique_color_id()
+
+        _residue.atoms[atom_id] = atom
+        vm_object.atoms[atom_id] = atom
+
+        atom_id += 1
+        vismol_session.atom_id_counter += 1
+
+    #logger.debug(
+    #    "Time used to build the tree: {:>8.5f} secs".format(time.time() - initial)
+    #)
+
+
+
+
+    
+    
+    vm_object.frames = frames
+    vm_object.mass_center = np.mean(vm_object.frames[0], axis=0)
+    #vm_object.active =False
+    
+    #vismol_object  = VismolObject(             name        = name, 
+    #                                           atoms       = atoms, 
+    #                                           vismol_session   = vismol_session, 
+    #                                           trajectory  = frames)
     
     
     #vismol_object._generate_atomtree_structure()
@@ -85,7 +148,7 @@ def load_xyz_file(infile=None, vismol_session=None, gridsize=3):
     #vismol_object.index_bonds_pairs = bonds_pair_of_indexes
     #vismol_object.non_bonded_atoms  = NB_indexes_list
     #-------------------------------------------------------------------------------------------
-    return vismol_object
+    return vm_object
 
 def get_atom_list_from_xyz_frame(raw_atoms, frame = True, gridsize = 3):#, at = None):
     """ Function doc """

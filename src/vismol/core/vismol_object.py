@@ -77,7 +77,7 @@ class VismolObject:
         trajectory = A list of coordinates - eg [ [x1,y1,z1, x2,y2,z2...], [x1,y1,z1, x2,y2,z2...]...]
                      One frame is is required at last.
     """
-    def __init__(self, vismol_session, index, name="UNK", active=False, trajectory=None,
+    def __init__(self, vismol_session, index = 0, name="UNK", active=False, trajectory=None,
                  color_palette=None, bonds_pair_of_indexes=None):
         """ Class initialiser """
         # References to vismol_session and its configuration
@@ -399,7 +399,12 @@ class VismolObject:
             Note: The function updates several attributes of the VismolObject, including 'colors', 'color_indexes',
                   'color_rainbow', 'vdw_dot_sizes', and 'cov_dot_sizes', based on the provided parameters.
         """
+        
         atom_qtty = len(self.atoms)
+        
+        if atom_qtty ==0:
+            return False
+        
         half = int(atom_qtty/2)
         quarter = int(atom_qtty/4)
         color_step = 1.0/(atom_qtty/4.0)
