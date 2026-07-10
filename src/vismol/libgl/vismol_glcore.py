@@ -253,6 +253,55 @@ class VismolGLCore:
                     self.parent_widget.queue_draw()
         else:
             if left:
+                # [EN] Builder "click to place atom" mode -- see
+                # gui/windows/builder/click_mode.py. Checked FIRST, before
+                # any of the normal picking/selection state below, and
+                # returns immediately if handled -- deliberately kept as
+                # a single, minimal-footprint early-exit so normal
+                # click-to-select behaviour (the rest of this method) is
+                # completely unaffected when this mode is off (the
+                # default / existing behaviour for every non-Builder use
+                # of the app).
+                #
+                # IMPORTANT (bug fixed after a live GLError report):
+                # mouse_released() is a plain GTK event handler, NOT the
+                # GLArea "render" callback -- the OpenGL context is only
+                # GUARANTEED current inside render() (that's exactly why
+                # self.picking below is just a flag set here and actually
+                # acted on, via self._pick(), from inside render() --
+                # never called directly from this handler). Calling
+                # handle_click_to_place_atom() (which does real GL calls:
+                # a whole extra draw pass to read the depth buffer)
+                # directly, right here, raised
+                # "GLError: invalid operation" on glBindVertexArray in
+                # the user's real environment -- exactly the class of
+                # error you get issuing GL calls with no current context.
+                # Fixed the same way self.picking already works: just
+                # record the click position and a flag here; the actual
+                # handle_click_to_place_atom() call now happens inside
+                # render(), right next to "if self.picking: self._pick()".
+                # [EN] Only intercepts for the "add" tool, and only for a
+                # PLAIN click (not self.shift) -- holding shift always
+                # falls through to normal click-to-select below,
+                # regardless of Builder mode, so the user can shift-click
+                # two atoms (the app's existing, already-accumulating
+                # multi-select -- see VismolViewingSelection.
+                # selecting_by_atom() in vismol_selections.py) to pick a
+                # pair for the 'b' add-bond shortcut without leaving
+                # Builder mode. The "delete" tool ALSO falls through here
+                # on purpose: it needs _pick() to actually run (to know
+                # WHICH atom was clicked) before builder_tool=='delete'
+                # is acted on -- see the new check added next to
+                # "if self.picking: self._pick()" in render().
+                if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                     and getattr ( self.vm_session, "builder_tool", "add" ) == "add"
+                     and not self.shift ):
+                    self.builder_click_x = np.float32(mouse_x)
+                    self.builder_click_y = np.float32(mouse_y)
+                    self.builder_placing_atom = True
+                    self.dragging = False
+                    self.parent_widget.queue_draw ( )
+                    return
                 self.picking_x = np.float32(mouse_x)
                 self.picking_y = np.float32(mouse_y)
                 self.picking = True
@@ -668,6 +717,31 @@ class VismolGLCore:
             self._selection_box_pick()
         if self.picking:
             self._pick()
+        # [EN] Builder "click to place atom" mode -- see the note in
+        # mouse_released() for why this can't be called from there
+        # directly (no guaranteed-current GL context outside render()).
+        # Mirrors the self.picking / self._pick() pattern immediately
+        # above: mouse_released() only sets a flag + the click
+        # coordinates; the actual GL work (handle_click_to_place_atom(),
+        # which reads the depth buffer via a real draw pass) only runs
+        # here, where GTK guarantees the context is current.
+        if getattr ( self, "builder_placing_atom", False ):
+            from gui.windows.builder.click_mode import handle_click_to_place_atom
+            handle_click_to_place_atom ( self, self.builder_click_x, self.builder_click_y )
+            self.builder_placing_atom = False
+        # [EN] Builder "delete atom" tool -- unlike "add" (handled
+        # entirely above via builder_placing_atom, no atom identification
+        # needed), "delete" needs to know WHICH atom was clicked, so it
+        # deliberately let the click fall through to normal self.picking
+        # / self._pick() above (see the comment in mouse_released()) --
+        # self.atom_picked is already set correctly by the time we get
+        # here. Only acts when the tool is actually 'delete', so a normal
+        # (non-Builder) click-to-select still works exactly as before.
+        if ( getattr ( self.vm_session, "builder_atom_mode", False )
+             and getattr ( self.vm_session, "builder_tool", "add" ) == "delete"
+             and self.atom_picked is not None ):
+            from gui.windows.builder.click_mode import handle_click_to_delete_atom
+            handle_click_to_delete_atom ( self )
         
         #print('self.dragging', self.dragging)
         

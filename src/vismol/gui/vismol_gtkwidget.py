@@ -238,6 +238,39 @@ class VismolGTKWidget(Gtk.GLArea):
         """ Function doc """
         self.vm_glcore.shift = False
     
+    # [EN] Builder keyboard shortcuts ('a'/'d'/'b') -- only act while
+    # Builder editing mode is on (builder_atom_mode), so these letter
+    # keys don't hijack anything when the Builder isn't in use (e.g. if
+    # 'a'/'b'/'d' end up wanted for some other, non-Builder shortcut
+    # later, or are just typed for an unrelated reason). See
+    # gui/windows/builder/click_mode.py for what each one does.
+    def _pressed_a(self):
+        """ Builder: switch to the "add atom" tool (plain click places a
+        new atom) -- also the default tool whenever Builder mode is
+        first turned on. """
+        if getattr ( self.vm_session, "builder_atom_mode", False ):
+            from gui.windows.builder.click_mode import set_tool
+            set_tool ( self.vm_session, "add" )
+            print ( "Builder: ferramenta = adicionar atomo" )
+
+    def _pressed_d(self):
+        """ Builder: switch to the "delete atom" tool (plain click
+        removes the clicked atom). """
+        if getattr ( self.vm_session, "builder_atom_mode", False ):
+            from gui.windows.builder.click_mode import set_tool
+            set_tool ( self.vm_session, "delete" )
+            print ( "Builder: ferramenta = apagar atomo" )
+
+    def _pressed_b(self):
+        """ Builder: one-shot action -- adds a bond between the two
+        atoms currently selected (shift-click two atoms first; see
+        click_mode.handle_bond_shortcut() for the exact requirements). """
+        if getattr ( self.vm_session, "builder_atom_mode", False ):
+            from gui.windows.builder.click_mode import handle_bond_shortcut
+            msg = handle_bond_shortcut ( self.vm_session )
+            print ( "Builder: {}".format ( msg ) )
+            self.queue_draw ( )
+    
     def _selection_type_picking(self, widget):
         if self.selection_box_frame:
             self.selection_box_frame.change_toggle_button_selecting_mode_status(True)

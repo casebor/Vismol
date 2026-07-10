@@ -836,6 +836,23 @@ class VismolObject:
         self.bond_order_list = []  # ordem de cada bond (paralela a self.bonds)
         new_index_bonds = []
 
+        # [EN] BUG FIX (found via the Builder tool, but pre-existing in
+        # this method regardless -- normal single-shot file loading never
+        # triggered it, since bonds were only ever computed once per
+        # object's lifetime; the Builder's add_atom()/remove_atom()/
+        # add_bond() call this repeatedly as atoms are added/removed one
+        # at a time, which exposed it): the loop below does
+        # self.atoms[index_i].bonds.append(bond) for every bond, but
+        # nothing was ever resetting each ATOM's OWN .bonds list first --
+        # only the OBJECT-level self.bonds dict got reset just above.
+        # Confirmed live: after 3 add_atom() calls plus one add_bond()
+        # call (4 total recomputations) on the same small object, atom 0
+        # had accumulated 6 stale/duplicate Bond objects in its .bonds
+        # list instead of the correct 2. Fixed by clearing every atom's
+        # .bonds list here, once, before the loop that repopulates it.
+        for atom in self.atoms.values ( ):
+            atom.bonds = []
+
         # Contador de bonds NÃO-excluídos. Só avança quando um bond é
         # efetivamente criado, mantendo o alinhamento com external_orders
         # (Convenção B). Diferente de i//2, que contaria também os excluídos.
