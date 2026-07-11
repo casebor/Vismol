@@ -755,7 +755,7 @@ class SticksRepresentation(Representation):
             if not self.vm_session.vm_config.gl_parameters.get("multiple_bonds", True):
                 return orders
         except Exception as _e:
-            print("[multiple_bonds DEBUG] erro ao ler flag:", _e)
+            print("[multiple_bonds DEBUG] error reading flag:", _e)
         ib = getattr(self.vm_object, "index_bonds", None)
         bol = getattr(self.vm_object, "bond_order_list", None)
         if ib is None or bol is None:

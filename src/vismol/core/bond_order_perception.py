@@ -369,7 +369,7 @@ if __name__ == "__main__":
         if expected is not None:
             got = {b: order[b] for b in order}
             ok = all(got.get(_normalize(*k)) == v for k, v in expected.items())
-            print("  -> esperado:", "OK" if ok else "DIVERGENTE")
+            print("  -> expected:", "OK" if ok else "MISMATCH")
 
     # Etano CH3-CH3 : tudo simples
     show("etano",

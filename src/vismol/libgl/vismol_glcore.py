@@ -877,8 +877,8 @@ class VismolGLCore:
                 avg_ms = avg_s * 1000.0
                 fps = (1.0 / avg_s) if avg_s > 0 else float("inf")
                 n_obj = len(self.vm_session.vm_objects_dic)
-                print("[FPS] {:.1f} fps | {:.3f} ms/render | {} objetos | "
-                      "media de {} frames".format(fps, avg_ms, n_obj,
+                print("[FPS] {:.1f} fps | {:.3f} ms/render | {} objects | "
+                      "average of {} frames".format(fps, avg_ms, n_obj,
                                                    self._fps_frame_count))
                 self._fps_frame_count = 0
                 self._fps_accum_time = 0.0

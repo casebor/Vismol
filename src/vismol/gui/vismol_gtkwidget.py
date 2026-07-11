@@ -251,7 +251,7 @@ class VismolGTKWidget(Gtk.GLArea):
         if getattr ( self.vm_session, "builder_atom_mode", False ):
             from gui.windows.builder.click_mode import set_tool
             set_tool ( self.vm_session, "add" )
-            print ( "Builder: ferramenta = adicionar atomo" )
+            print ( "Builder: tool = add atom" )
 
     def _pressed_d(self):
         """ Builder: switch to the "delete atom" tool (plain click
@@ -259,7 +259,7 @@ class VismolGTKWidget(Gtk.GLArea):
         if getattr ( self.vm_session, "builder_atom_mode", False ):
             from gui.windows.builder.click_mode import set_tool
             set_tool ( self.vm_session, "delete" )
-            print ( "Builder: ferramenta = apagar atomo" )
+            print ( "Builder: tool = delete atom" )
 
     def _pressed_b(self):
         """ Builder: one-shot action -- adds a bond between the two
@@ -516,7 +516,7 @@ class VismolGTKWidget(Gtk.GLArea):
         self.make_current()
 
         if self.get_error() is not None:
-            print("Erro no contexto OpenGL")
+            print("Error in OpenGL context")
             return None
 
         if scale_factor != 1:
