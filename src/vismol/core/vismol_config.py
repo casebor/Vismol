@@ -93,8 +93,18 @@ class VismolConfig:
         #                                   "ribbon", "sticks", "spheres", "impostor",
         #                                   "surface", "cartoon", "freetype",
         #                                   "picking_dots"}
+        # [EN] "cartoon" re-added (was only in the commented-out version
+        # above, not the active set below -- meaning self.representations
+        # (built from this set in VismolObject.__init__) never had a
+        # "cartoon" key pre-declared at all). Without it,
+        # vm_session.show_or_hide() -- used by the terminal's "show"/
+        # "hide" commands -- would raise KeyError('cartoon') on
+        # `vm_object.representations[rep_type]`, since that line indexes
+        # the dict directly rather than using .get(). Safe to re-enable
+        # now that calculate_secondary_structure()'s vector-math bug
+        # (see cartoon_BCK.py) is fixed -- see the changelog there.
         self.representations_available = {"dots", "lines", "nonbonded", "impostor",'dash', "posdot_type",
-                                          "sticks", "spheres", 'ribbons',#'ribbon_sphere', 
+                                          "sticks", "spheres", 'ribbons', 'cartoon', #'ribbon_sphere', 
                                           'dynamic','vdw_spheres', 'picking_spheres', 'static_freetype'}
     
     

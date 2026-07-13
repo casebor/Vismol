@@ -2029,105 +2029,75 @@ class CartoonRepresentation(Representation):
         
         coords, normals, indexes, colors = cartoon.cartoon(vismol_object, spline_detail=5)
         
-        coords = coords.flatten()
-        normals = normals.flatten()
-        colors = colors.flatten()
-        
-        
-        self.coords2 = coords
-        self.colors2 = colors
-        self.normals2 = normals
-        self.indexes2 = indexes
+        # [EN] BUG FIX: this used to store these as self.coords2/colors2/
+        # normals2/indexes2 (note the "2" suffix) -- but every OTHER
+        # piece of machinery that touches a representation's geometry
+        # (the base Representation._make_gl_representation_vao_and_vbos(),
+        # draw_representation() a few lines below, etc.) expects the
+        # PLAIN, un-suffixed names (self.coords/self.colors/self.normals/
+        # self.indexes), matching every other representation type (see
+        # SurfaceRepresentation, which faces the exact same "fully custom,
+        # non vm_object.frames-based geometry" situation cartoon does).
+        # The "2" suffix meant every read of these fields elsewhere raised
+        # AttributeError the moment Cartoon was actually drawn. Also now
+        # explicitly cast to the dtypes the GL buffer helpers expect --
+        # this exact cast used to exist here (as a triple-quoted, disabled
+        # block) and was never actually applied.
+        self.coords  = np.ascontiguousarray(coords,  dtype=np.float32)
+        self.colors  = np.ascontiguousarray(colors,  dtype=np.float32)
+        self.normals = np.ascontiguousarray(normals, dtype=np.float32)
+        self.indexes = np.ascontiguousarray(indexes, dtype=np.uint32)
 
-    def _make_gl_vao_and_vbos (self, indexes = None):
-        """ Function doc """
-        #if indexes is not None:
-        #    pass
-        #else:
-        
-        #dot_qtty  = int(len(self.vm_object.frames[0])/3)
-        #indexes = []
-        #for i in range(dot_qtty):
-        #    indexes.append(i)
-        
+    def _make_gl_representation_vao_and_vbos(self, debug = False):
+        """ [EN] Overrides the base Representation version (which reads
+        self.vm_object.frames[0]/self.vm_object.colors -- the whole
+        object's plain atom buffers) because Cartoon's geometry, like
+        Surface's, is entirely generated (a spline-interpolated ribbon
+        mesh, produced by cartoon_BCK.cartoon() in __init__ above) and
+        has nothing to do with vm_object's own per-atom arrays -- neither
+        the vertex COUNT nor the ORDER match. Mirrors
+        SurfaceRepresentation._make_gl_representation_vao_and_vbos()'s
+        pattern, adapted for cartoon's own attribute names and its
+        shader's "vert_norm" attribute (SurfaceRepresentation's own
+        _make_gl_normal_buffer() targets "vert_normal" instead -- a
+        different name, matching ITS shader -- so it can't be reused
+        as-is here; see _make_gl_normal_buffer() below). """
+        if debug:
+            logger.debug("building '{}' representation VAO and VBOs".format(self.name))
+        self.vao       = self._make_gl_vao()
+        self.ind_vbo   = self._make_gl_index_buffer(self.indexes)
+        self.coord_vbo = self._make_gl_coord_buffer(self.coords, self.shader_program)
+        self.col_vbo   = self._make_gl_color_buffer(self.colors, self.shader_program)
+        self.norm_vbo  = self._make_gl_normal_buffer(self.normals, self.shader_program)
 
-        self.shader_program     = self.vm_glcore.shader_programs[self.name]
-        #self.sel_shader_program = self.vm_glcore.shader_programs[self.name+'_sel']
-        
+    def _make_gl_normal_buffer(self, normals, program):
+        """ Buffer de normais por vertice, pro atributo 'vert_norm' que o
+        shader de cartoon declara (ver shaders/cartoon.py -- note que e
+        'vert_norm', nao 'vert_normal' como no shader de superficie). """
+        norm_vbo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, norm_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, normals.nbytes, normals, GL.GL_STATIC_DRAW)
+        att_normal = GL.glGetAttribLocation(program, "vert_norm")
+        GL.glEnableVertexAttribArray(att_normal)
+        GL.glVertexAttribPointer(att_normal, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*normals.itemsize, ctypes.c_void_p(0))
+        return norm_vbo
 
-        """
-        coords  = np.array(self.coords2, dtype=np.float32)
-        colors  = np.array(self.colors2, dtype=np.float32)
-        normals = np.array(self.normals2, dtype=np.float32)
-        indexes = np.array(self.indexes2, dtype=np.uint32)
-        """
-        
-        
-        coords  = self.coords2 
-        colors  = self.colors2 
-        normals = self.normals2
-        indexes = self.indexes2
-        
-        print ('len(coords),len(colors), len(normals),len(indexes)', len(coords),len(colors), len(normals),len(indexes)  )
-
-        self._make_gl_representation_vao_and_vbos (indexes    = indexes,
-                                                   coords     = coords ,
-                                                   colors     = colors ,
-                                                   dot_sizes  = None   ,
-                                                   normals    = normals
-                                                   )
-        
-        
-        
-        self.ind_vbo = GL.glGenBuffers(1)
-        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.ind_vbo)
-        GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, indexes.itemsize*len(indexes), indexes, GL.GL_DYNAMIC_DRAW)
-        
-        #self.coord_vbo = GL.glGenBuffers(1)
-        #GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coord_vbo)
-        ##GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.itemsize*len(coords), coords, GL.GL_STATIC_DRAW)
-        #GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.nbytes, coords, GL.GL_STATIC_DRAW)
-        #gl_coord = GL.glGetAttribLocation(self.shader_program, 'vert_coord')
-        #GL.glEnableVertexAttribArray(gl_coord)
-        #GL.glVertexAttribPointer(gl_coord, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*coords.itemsize, ctypes.c_void_p(0))
-        
-        
-        self.col_vbo = GL.glGenBuffers(1)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.col_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, colors.itemsize*len(colors), colors, GL.GL_STATIC_DRAW)
-        gl_color = GL.glGetAttribLocation(self.shader_program, 'vert_color')
-        GL.glEnableVertexAttribArray(gl_color)
-        GL.glVertexAttribPointer(gl_color, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*colors.itemsize, ctypes.c_void_p(0))
-
-        self.norm_vbo = GL.glGenBuffers(1)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.norm_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, normals.itemsize*len(normals), normals, GL.GL_STATIC_DRAW)
-        gl_norm = GL.glGetAttribLocation(self.shader_program, 'vert_norm')
-        GL.glEnableVertexAttribArray(gl_norm)
-        GL.glVertexAttribPointer(gl_norm, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*normals.itemsize, ctypes.c_void_p(0))
-        
-        
-        
-        
-        
-        #self.centr_vbo = GL.glGenBuffers(1)
-        #GL.glBindBuffer(GL.GL_ARRAY_BUFFER, coords)
-        #GL.glBufferData(GL.GL_ARRAY_BUFFER, coords.itemsize*len(coords), coords, GL.GL_STATIC_DRAW)
-        #gl_center = GL.glGetAttribLocation(self.shader_program , 'vert_centr')
-        #GL.glEnableVertexAttribArray(gl_center)
-        #GL.glVertexAttribPointer(gl_center, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*coords.itemsize, ctypes.c_void_p(0))
-        
-        
-        
-        colors_idx = self.vm_object.color_indexes
-        self.sel_vao = True
-        """
-        self._make_gl_sel_representation_vao_and_vbos (indexes    = indexes    ,
-                                                       coords     = coords     ,
-                                                       colors     = colors_idx ,
-                                                       dot_sizes  = None       ,
-                                                       )
-        """
+    def _make_gl_sel_representation_vao_and_vbos(self, debug = False):
+        """ [EN] Background/picking VAO -- reuses the exact same geometry
+        and colours as the main representation (NOT real per-vertex pick
+        colours, which would need one unique colour per pickable unit;
+        out of scope here -- click-to-select on a Cartoon ribbon isn't
+        implemented). This exists purely so _check_vao_and_vbos() (which
+        unconditionally builds both the main AND the sel VAO the first
+        time a representation is drawn) has something valid to build
+        instead of crashing on the same self.indexes/self.vm_object.
+        frames[0] mismatch the main VAO override above avoids. """
+        if debug:
+            logger.debug("building '{}' background selection VAO and VBOs".format(self.name))
+        self.sel_vao       = self._make_gl_vao()
+        self.sel_ind_vbo   = self._make_gl_index_buffer(self.indexes)
+        self.sel_coord_vbo = self._make_gl_coord_buffer(self.coords, self.sel_shader_program)
+        self.sel_col_vbo   = self._make_gl_color_buffer(self.colors, self.sel_shader_program)
 
     def draw_representation (self):
         """ Function doc """
@@ -2149,7 +2119,7 @@ class CartoonRepresentation(Representation):
         self.vm_glcore.load_lights  (self.shader_program )
         self.vm_glcore.load_fog     (self.shader_program )
         GL.glBindVertexArray(self.vao)
-        GL.glDrawElements(GL.GL_TRIANGLES, int(len(self.indexes2)), GL.GL_UNSIGNED_INT, None)
+        GL.glDrawElements(GL.GL_TRIANGLES, int(len(self.indexes)), GL.GL_UNSIGNED_INT, None)
         GL.glDisable(GL.GL_DEPTH_TEST)
         
         

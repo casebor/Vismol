@@ -2214,19 +2214,28 @@ class VismolGLCore:
         self.shader_programs["surface_sel"] = self.load_shaders(shaders_spheres.vertex_shader_spheres,
                                                         shaders_spheres.fragment_shader_spheres)
     
-    
-    
-    
-    '''
+    # [EN] BUG FIX: this method used to sit inside a '''...''' dead-code
+    # block (immediately followed by another one literally commented
+    # "NOT IMPLEMENTED YET") -- so it was never actually a real method
+    # on this class at all, despite looking like normal, live code on a
+    # quick read. initialize()'s shader-compile loop
+    # (for rep in self.representations_available: getattr(self,
+    # "_compile_shader_" + rep)()) would hit AttributeError for
+    # "cartoon" every single time, which its own except AttributeError
+    # handler swallows silently (just an error-level log line) -- so
+    # "cartoon" never actually landed in self.shader_programs, and the
+    # very first attempt to draw a Cartoon representation crashed with
+    # KeyError('cartoon') in representations.py's _check_vao_and_vbos().
+    # Restored to live code now that calculate_secondary_structure()'s
+    # actual bug (see cartoon_BCK.py) is fixed -- that was almost
+    # certainly the original reason this got commented out and marked
+    # "not implemented yet" to begin with.
     def _compile_shader_cartoon(self):
         """ Function doc """
         self.shader_programs["cartoon"] = self.load_shaders(shaders_cartoon.v_shader_triangles,
                                                     shaders_cartoon.f_shader_triangles)
         self.shader_programs["cartoon_sel"] = self.load_shaders(shaders_cartoon.v_shader_triangles,
                                                     shaders_cartoon.f_shader_triangles)
-    
-    
-    #'''
     
     '''
     #----------------------------NOT IMPLEMENTED YET---------------------------#
