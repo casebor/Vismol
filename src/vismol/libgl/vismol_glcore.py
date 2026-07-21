@@ -48,6 +48,32 @@ import vismol.utils.matrix_operations as mop
 from vismol.core.vismol_object import VismolObject
 from vismol.model.atom import Atom
 import math
+
+# [EN] BUG FIXED (reported by the user: real crash on app startup --
+# "ImportError: cannot import name 'VismolGLCore' from
+# 'vismol.libgl.vismol_glcore'"). This USED to be a top-level
+# `from gui.windows.builder import click_mode/atom_ops/empty_object`
+# right here -- reasoned (at length, in this project's own history) to
+# be safe based on reading every file in the dependency chain and
+# finding no import that led back to this module. That static reading
+# turned out to be incomplete somehow (the exact live import order
+# vismol_gtkwidget.py -> vismol_glcore.py -> gui.windows.builder.* takes
+# during actual app startup isn't fully visible from source alone, and
+# apparently loops back to THIS module before the VismolGLCore class
+# below is defined, in a way the static check missed). Reverted to
+# local/deferred imports (see mouse_pressed()/mouse_motion()/
+# mouse_released()/render(), the only 4 methods that actually use
+# click_mode/atom_ops/empty_object) -- imported lazily, inside each of
+# those methods, the FIRST time any of them actually runs, which is
+# necessarily well after the whole application (including
+# vismol_gtkwidget.py) has already finished loading, so this can no
+# longer participate in any load-time cycle, regardless of the exact
+# mechanism of the one that broke here. Costs nothing extra after the
+# first call either (Python caches already-imported modules in
+# sys.modules; a repeated `import` is just a fast dict lookup, not a
+# re-execution) -- same reasoning that justified the top-level import
+# in the first place, just without the load-time risk.
+
 logger = getLogger(__name__)
 
 
@@ -218,6 +244,67 @@ class VismolGLCore:
                     self.selection_box_x = mouse_x
                     self.selection_box_y = self.height - mouse_y
 
+            # [EN] Builder "click-and-drag to create a bonded atom" -- see
+            # gui/windows/builder/click_mode.py (click_mode.start_bond_drag() /
+            # click_mode.update_bond_drag() / click_mode.finish_bond_drag()). For the "add"
+            # tool, plain press (not shift, same reasoning as the
+            # click-to-place/click-to-replace hook in mouse_released():
+            # shift always falls through to normal multi-select so 'b'
+            # add-bond-between-two-selected-atoms keeps working
+            # unchanged; not ctrl either -- Ctrl+click is reserved for
+            # cycling a BOND's order, see the mouse_released() hook below
+            # and click_mode.cycle_bond_order()).
+            #
+            # ALSO covers the "move" tool -- a plain drag there means
+            # "reposition this existing atom" instead of "create a new
+            # bonded one" (see click_mode.start_atom_drag(), and the
+            # tool branch added to the candidate-resolution block in
+            # mouse_motion() below that decides which of the two this
+            # turns into). Sharing this SAME press-recording/candidate
+            # mechanism between both tools is safe because they're
+            # mutually exclusive -- only one tool is ever active at a
+            # time -- so there's no ambiguity about which action a given
+            # drag should resolve to.
+            #
+            # Deliberately does NOT touch mouse_rotate here (was an
+            # earlier version's bug, fixed after the user reported the
+            # camera not rotating AT ALL anymore while the "add" tool was
+            # selected, even over empty space): we can't know yet whether
+            # this press landed on an atom or on empty space (the actual
+            # pick has to happen inside render() -- see the GL-context
+            # constraint documented next to builder_placing_atom in
+            # render()), so suppressing rotation unconditionally here
+            # would kill normal camera-rotate-by-drag for every plain
+            # empty-space drag too, not just the bond-drag case. Instead:
+            # just remember the press position; mouse_motion() only
+            # actually starts the bond-drag (and only THEN turns rotation
+            # off) once real mouse movement confirms the press resolved
+            # to an atom AND the user is genuinely dragging, not just
+            # clicking -- see mouse_motion() and the render() hook below.
+            if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                 and getattr ( self.vm_session, "builder_tool", "add" ) in ( "add", "move" )
+                 and not self.shift and not self.ctrl ):
+                self.builder_press_x = np.float32 ( mouse_x )
+                self.builder_press_y = np.float32 ( mouse_y )
+                self.builder_checking_press = True
+
+            # [EN] Builder "Ctrl+drag to reposition an existing atom" --
+            # see gui/windows/builder/click_mode.py (click_mode.start_atom_drag() /
+            # click_mode.update_atom_drag() / click_mode.finish_atom_drag()). Same reasoning as
+            # the plain-drag press recording just above (deferred pick,
+            # no mouse_rotate touched here) -- just gated on self.ctrl
+            # instead of its absence. A plain Ctrl+click (no real drag)
+            # on a BOND still means "cycle its order" (see the
+            # mouse_released() hook below) -- these two never conflict,
+            # since one only ever resolves to an ATOM and the other only
+            # ever resolves to a BOND's on-screen line.
+            if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                 and getattr ( self.vm_session, "builder_tool", "add" ) == "add"
+                 and self.ctrl and not self.shift ):
+                self.builder_ctrl_press_x = np.float32 ( mouse_x )
+                self.builder_ctrl_press_y = np.float32 ( mouse_y )
+                self.builder_ctrl_checking_press = True
+
         if middle:
             self.picking_x = np.float32(mouse_x)
             self.picking_y = np.float32(mouse_y)
@@ -237,12 +324,83 @@ class VismolGLCore:
         menu_type = "pick_menu" / "bg_menu" / "sele_menu" / "ob_menu"
         
         """
+        # [EN] Local/deferred import -- see the note at the top of this
+        # file (where this used to be a module-level import) for why:
+        # importing here, the first time this method actually runs
+        # (necessarily well after the whole app has finished loading),
+        # avoids the load-time circular import that broke when this was
+        # a top-level import instead. Cheap on every subsequent call --
+        # Python caches already-imported modules in sys.modules.
+        from gui.windows.builder import click_mode, atom_ops, empty_object
         left   = np.int32(button_number) == 1
         middle = np.int32(button_number) == 2
         right  = np.int32(button_number) == 3
         self.mouse_rotate = False
         self.mouse_zoom = False
         self.mouse_pan = False
+        # [EN] Builder "click-and-drag to create a bonded atom" -- checked
+        # FIRST and returns immediately, same "early-exit, don't touch
+        # anything below" structure as the builder_placing_atom hook
+        # further down. Checking builder_bond_drag_active explicitly
+        # here, rather than relying on self.dragging's value, avoids ANY
+        # ambiguity with the plain-click builder_placing_atom path below
+        # (which would otherwise ALSO fire on this same release and
+        # place/replace a second atom on top of the one just finished
+        # being dragged).
+        if getattr ( self.vm_session, "builder_bond_drag_active", False ):
+            click_mode.finish_bond_drag ( self )
+            self.dragging = False
+            self.parent_widget.queue_draw ( )
+            return
+        # [EN] Builder "Ctrl+drag to reposition an existing atom" --
+        # checked next, same early-exit reasoning as builder_bond_drag_
+        # active just above. MUST come before the Ctrl+click-a-bond
+        # handling right below: without this, releasing after a genuine
+        # Ctrl+drag would fall through into click_mode.find_bond_at_pixel() at the
+        # RELEASE position and could cycle an unrelated bond's order as
+        # an unintended side effect of what was actually just a
+        # reposition gesture.
+        if getattr ( self.vm_session, "builder_ctrl_drag_active", False ):
+            click_mode.finish_atom_drag ( self )
+            self.dragging = False
+            self.parent_widget.queue_draw ( )
+            return
+        # [EN] Builder "Ctrl+click on a bond -> cycle its order" -- see
+        # click_mode.cycle_bond_order()/click_mode.find_bond_at_pixel(). Pure Python/
+        # numpy (a 2D-projection distance check, not a GPU pick -- see
+        # click_mode.find_bond_at_pixel()'s own docstring for why), so unlike
+        # builder_placing_atom/builder_checking_press below, this needs
+        # NO deferral to render() for a GL context -- runs directly here.
+        # Scoped to ONLY vm_session.builder_target_object, matching the
+        # "only one object is editable at a time" design. Checked before
+        # self.dragging/builder_placing_atom below and returns immediately
+        # so Ctrl+click never ALSO tries to place/replace an atom on the
+        # same click (mouse_pressed() already keeps Ctrl+click out of the
+        # builder_checking_press flow that would otherwise trigger that).
+        if ( left and self.ctrl and not self.shift
+             and getattr ( self.vm_session, "builder_atom_mode", False )
+             and getattr ( self.vm_session, "builder_tool", "add" ) == "add" ):
+            target_object = getattr ( self.vm_session, "builder_target_object", None )
+            if target_object is not None:
+                bond = click_mode.find_bond_at_pixel ( self, target_object, mouse_x, mouse_y )
+                if bond is not None:
+                    click_mode.cycle_bond_order ( self, target_object, bond )
+            # limpa qualquer candidato de atom-drag que tenha ficado
+            # pendente (um Ctrl+clique sem arrasto real nunca chega a
+            # consumir esse candidato em mouse_motion())
+            self.vm_session.builder_ctrl_press_candidate_atom  = None
+            self.vm_session.builder_ctrl_press_candidate_depth = None
+            self.dragging = False
+            self.parent_widget.queue_draw ( )
+            return
+        # A plain (non-Ctrl) press landed on an atom but never turned into a real drag (a
+        # plain click) -- the candidate mouse_motion() would have
+        # consumed on the first real movement never got claimed, so
+        # clear it here rather than letting it leak into the NEXT
+        # press/drag. This is exactly the "click on an atom -> replace"
+        # case, handled below via the normal builder_placing_atom path.
+        self.vm_session.builder_press_candidate_atom  = None
+        self.vm_session.builder_press_candidate_depth = None
         if self.dragging:
             if left:
                 if self.shift:
@@ -270,7 +428,7 @@ class VismolGLCore:
                 # self.picking below is just a flag set here and actually
                 # acted on, via self._pick(), from inside render() --
                 # never called directly from this handler). Calling
-                # handle_click_to_place_atom() (which does real GL calls:
+                # click_mode.handle_click_to_place_atom() (which does real GL calls:
                 # a whole extra draw pass to read the depth buffer)
                 # directly, right here, raised
                 # "GLError: invalid operation" on glBindVertexArray in
@@ -278,7 +436,7 @@ class VismolGLCore:
                 # error you get issuing GL calls with no current context.
                 # Fixed the same way self.picking already works: just
                 # record the click position and a flag here; the actual
-                # handle_click_to_place_atom() call now happens inside
+                # click_mode.handle_click_to_place_atom() call now happens inside
                 # render(), right next to "if self.picking: self._pick()".
                 # [EN] Only intercepts for the "add" tool, and only for a
                 # PLAIN click (not self.shift) -- holding shift always
@@ -316,6 +474,99 @@ class VismolGLCore:
                     self.center_on_atom(self.atom_picked)
                     self.atom_picked = None
             if right:
+                # [EN] Builder "right-click to delete" (Avogadro-style) --
+                # checked FIRST, before the normal context-menu logic
+                # below. Only active while builder_atom_mode + tool==
+                # "add", and ONLY for vm_session.builder_target_object
+                # (same "one editable object at a time" scoping as
+                # Ctrl+click/bond-order-cycling). Right-click an ATOM
+                # (self.atom_picked, from the normal _pick() pass that
+                # already ran for this release -- see mouse_pressed(),
+                # which already sets self.picking=True for the right
+                # button, same as it always did) deletes that atom;
+                # right-click a BOND (found via the same projection-
+                # distance check Ctrl+click uses, see
+                # click_mode.find_bond_at_pixel()) deletes just that
+                # bond. If NEITHER is under the cursor, falls through to
+                # the normal context menu below UNCHANGED -- this never
+                # suppresses the menu on a background/other-object click,
+                # only when something was actually deleted.
+                if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                     and getattr ( self.vm_session, "builder_tool", "add" ) == "add" ):
+                    target_object = getattr ( self.vm_session, "builder_target_object", None )
+                    if target_object is not None:
+                        if self.atom_picked is not None and self.atom_picked.vm_object is target_object:
+                            print ( "DEBUG vismol_glcore: builder right-click delete -- atom #{} ('{}')".format (
+                                    self.atom_picked.atom_id, self.atom_picked.symbol ) )
+                            atom_ops.push_undo_snapshot ( target_object )
+
+                            deleted_symbol = self.atom_picked.symbol
+                            deleted_id     = self.atom_picked.atom_id
+
+                            # [EN] Capture the (still-live) Atom OBJECT
+                            # references of every former neighbour BEFORE
+                            # removing -- atom_ops.remove_atom() renumbers every
+                            # atom_id above the removed one, but mutates
+                            # each SURVIVING atom's .atom_id IN PLACE, so
+                            # reading it fresh off the object afterwards
+                            # (below) is always correct regardless. Skips
+                            # neighbours that are themselves hydrogens --
+                            # nothing to "adjust" on an H (its own target
+                            # valence is always satisfied by its one bond).
+                            neighbor_objs = [ ]
+                            for bond in target_object.bonds.values ( ):
+                                if bond.atom_index_i != deleted_id and bond.atom_index_j != deleted_id:
+                                    continue
+                                other_id = bond.atom_index_j if bond.atom_index_i == deleted_id else bond.atom_index_i
+                                neighbor = target_object.atoms[other_id]
+                                if neighbor.symbol != 'H':
+                                    neighbor_objs.append ( neighbor )
+
+                            atom_ops.remove_atom ( target_object, deleted_id )
+
+                            # [EN] Deliberately SKIPPED when the deleted
+                            # atom was itself a hydrogen: adjusting its
+                            # (former) parent right after would just
+                            # immediately re-add a replacement H, making
+                            # "delete this H" a complete no-op from the
+                            # user's point of view -- clearly not what a
+                            # deliberate right-click delete on an H means.
+                            if deleted_symbol != 'H':
+                                for neighbor in neighbor_objs:
+                                    atom_ops.adjust_hydrogens ( target_object, neighbor.atom_id )
+
+                            empty_object.sync_pdynamo_system ( target_object )
+
+                            self.atom_picked = None
+                            self.dragging = False
+                            self.parent_widget.queue_draw ( )
+                            return
+                        elif self.atom_picked is None:
+                            # so tenta achar um BOND se nenhum atomo foi
+                            # pego pelo picking normal (um atomo do objeto-
+                            # alvo sempre tem prioridade sobre uma ligacao)
+                            bond = click_mode.find_bond_at_pixel ( self, target_object, mouse_x, mouse_y )
+                            if bond is not None:
+                                print ( "DEBUG vismol_glcore: builder right-click delete -- bond #{} <-> #{}".format (
+                                        bond.atom_index_i, bond.atom_index_j ) )
+                                atom_ops.push_undo_snapshot ( target_object )
+                                atom_a_obj = target_object.atoms[bond.atom_index_i]
+                                atom_b_obj = target_object.atoms[bond.atom_index_j]
+                                atom_ops.remove_bond ( target_object, bond.atom_index_i, bond.atom_index_j )
+                                # [EN] Removing a bond FREES UP valence on
+                                # both sides -- unlike the atom-deletion
+                                # case above, there's no "undo-my-own-
+                                # click" ambiguity here (deleting a BOND,
+                                # not an H atom directly), so both atoms
+                                # always get adjusted, hydrogens included.
+                                atom_ops.adjust_hydrogens ( target_object, atom_a_obj.atom_id )
+                                atom_ops.adjust_hydrogens ( target_object, atom_b_obj.atom_id )
+
+                                empty_object.sync_pdynamo_system ( target_object )
+
+                                self.dragging = False
+                                self.parent_widget.queue_draw ( )
+                                return
                 # The right button (button = 3) always opens one of the available menus.
                 self.button = 3
                 menu_type = None
@@ -372,6 +623,9 @@ class VismolGLCore:
     def mouse_motion(self, mouse_x, mouse_y):
         """ Function doc
         """
+        # [EN] Local/deferred import -- see the note near mouse_released()
+        # (and at the top of this file) for why.
+        from gui.windows.builder import click_mode
         x = np.float32(mouse_x)
         y = np.float32(mouse_y)
         dx = x - self.mouse_x
@@ -379,6 +633,82 @@ class VismolGLCore:
         if (dx == 0) and (dy == 0):
             return
         self.mouse_x, self.mouse_y = x, y
+        # [EN] Builder "click-and-drag to create a bonded atom" -- checked
+        # FIRST, before the normal rotate/pan/zoom branches below.
+        #
+        # Two stages:
+        #  1) A drag is ALREADY active (builder_bond_drag_active) --
+        #     just reposition the dragged atom every motion event.
+        #     click_mode.update_bond_drag() does pure math (no GL calls:
+        #     world_pos_from_mouse() only touches the GPU when depth is
+        #     None, and here it's always the FIXED depth captured once
+        #     in click_mode.start_bond_drag()), so unlike click_mode.handle_click_to_place_atom()
+        #     this is safe to call directly from a plain GTK handler,
+        #     every single motion event, without deferring to render().
+        #  2) No drag active yet, but render() left a CANDIDATE atom
+        #     waiting (a press that landed on an atom, but we don't yet
+        #     know if the user is dragging or just about to release a
+        #     plain click) -- THIS motion event is the proof that real
+        #     dragging is happening, so the bond-drag actually starts
+        #     now (lazily). Only from this point on is mouse_rotate
+        #     turned off -- a press that never turns into a real drag
+        #     (a plain click) never touches mouse_rotate at all, so
+        #     normal camera-rotate-by-drag keeps working exactly as
+        #     before for every press that ISN'T on an atom (bug fixed
+        #     after the user reported the camera not rotating AT ALL
+        #     anymore while the "add" tool was active, even over empty
+        #     space -- see the note in mouse_pressed()).
+        if getattr ( self.vm_session, "builder_bond_drag_active", False ):
+            click_mode.update_bond_drag ( self, mouse_x, mouse_y )
+            self.dragging = True
+            return
+
+        candidate_atom = getattr ( self.vm_session, "builder_press_candidate_atom", None )
+        if candidate_atom is not None:
+            candidate_depth = getattr ( self.vm_session, "builder_press_candidate_depth", None )
+            self.vm_session.builder_press_candidate_atom  = None
+            self.vm_session.builder_press_candidate_depth = None
+
+            # [EN] "move" tool -> plain drag repositions the existing
+            # atom (click_mode.start_atom_drag(), the SAME functions
+            # Ctrl+drag uses in the "add" tool -- see that feature's own
+            # comments); any other tool ("add") -> plain drag creates a
+            # new bonded atom, as before.
+            if getattr ( self.vm_session, "builder_tool", "add" ) == "move":
+                click_mode.start_atom_drag ( self, candidate_atom, candidate_depth )
+                click_mode.update_atom_drag ( self, mouse_x, mouse_y )
+            else:
+                click_mode.start_bond_drag ( self, candidate_atom, candidate_depth )
+                click_mode.update_bond_drag ( self, mouse_x, mouse_y )   # move it to THIS event's position right away, not just the press position
+            self.mouse_rotate = False
+            self.mouse_pan    = False
+            self.mouse_zoom   = False
+            self.dragging = True
+            return
+
+        # [EN] Builder "Ctrl+drag to reposition an existing atom" -- same
+        # "already active" / "lazy start from a candidate" two-stage
+        # structure as the plain bond-drag handling just above (see that
+        # block's own comments for the full reasoning; identical here).
+        if getattr ( self.vm_session, "builder_ctrl_drag_active", False ):
+            click_mode.update_atom_drag ( self, mouse_x, mouse_y )
+            self.dragging = True
+            return
+
+        ctrl_candidate_atom = getattr ( self.vm_session, "builder_ctrl_press_candidate_atom", None )
+        if ctrl_candidate_atom is not None:
+            ctrl_candidate_depth = getattr ( self.vm_session, "builder_ctrl_press_candidate_depth", None )
+            self.vm_session.builder_ctrl_press_candidate_atom  = None
+            self.vm_session.builder_ctrl_press_candidate_depth = None
+
+            click_mode.start_atom_drag ( self, ctrl_candidate_atom, ctrl_candidate_depth )
+            click_mode.update_atom_drag ( self, mouse_x, mouse_y )
+            self.mouse_rotate = False
+            self.mouse_pan    = False
+            self.mouse_zoom   = False
+            self.dragging = True
+            return
+
         changed = False
         if self.mouse_rotate:
             changed = self._rotate_view(dx, dy, x, y)
@@ -389,6 +719,44 @@ class VismolGLCore:
         if changed:
             self.dragging = True
             self.parent_widget.queue_draw()
+
+        # [EN] "Hover -> print which atom + draw a highlight ring" -- used
+        # to be a pure-CPU 2D-projection distance check (see click_mode.
+        # find_atom_at_pixel_2d_any_object(), still defined there but no
+        # longer called from here). BUG FIXED (reported by the user after
+        # actually testing this): that approach ignored OCCLUSION -- it
+        # only compared screen-space DISTANCE to each atom's projected
+        # centre, with no idea whether some OTHER atom/geometry was
+        # actually in front, blocking the view -- so it disagreed with
+        # real click-picking (which reads the real depth/colour buffer,
+        # respecting whatever's actually visible at that pixel) any time
+        # something occluded the "closest in 2D" atom. Fixed by using the
+        # EXACT SAME GPU colour-ID pick real clicks already use
+        # (click_mode._read_depth_and_atom_at_pixel()) -- guaranteed
+        # consistent BY CONSTRUCTION, since it's literally the same code
+        # path, not a separate approximation that could disagree again in
+        # some other way later.
+        #
+        # Real GPU picks need a render pass + a synchronous glReadPixels
+        # (see that function's own docstring for why that's a genuine,
+        # well-documented stall, not just "one more call") -- too
+        # expensive to do on every single motion event, so THROTTLED by
+        # time here (builder_hover_last_check_time) to at most ~12
+        # checks/second, however fast the mouse is actually moving.
+        # Recording the position and setting builder_hover_checking=True
+        # is all that happens HERE, though -- the actual GL calls are
+        # deferred to render() (see the hook added there), same GL-
+        # context-only-guaranteed-inside-render() constraint documented
+        # at length next to builder_placing_atom/builder_checking_press.
+        elif not self.mouse_rotate and not self.mouse_pan and not self.mouse_zoom:
+            now = time.time ( )
+            last_check = getattr ( self, "builder_hover_last_check_time", 0.0 )
+            if now - last_check >= 0.08:
+                self.builder_hover_last_check_time = now
+                self.builder_hover_check_x = np.float32 ( mouse_x )
+                self.builder_hover_check_y = np.float32 ( mouse_y )
+                self.builder_hover_checking = True
+                self.parent_widget.queue_draw ( )
         
         #else:
         #    self.dragging = False
@@ -702,6 +1070,9 @@ class VismolGLCore:
         """ This is the function that will be called everytime the window
             needs to be re-drawed.
         """
+        # [EN] Local/deferred import -- see the note near mouse_released()
+        # (and at the top of this file) for why.
+        from gui.windows.builder import click_mode
         # Medidor opcional: marca o inicio do corpo do render. Mede o custo
         # de CPU+submissao GL deste frame (nao inclui o tempo ocioso entre
         # frames), que e exatamente o numero relevante para avaliar se o
@@ -713,45 +1084,29 @@ class VismolGLCore:
             self.selection_box.initialize_gl()
             self.axis.initialize_gl()
             self.shader_flag = False
-        if self.selection_box_picking:
-            self._selection_box_pick()
-        if self.picking:
-            self._pick()
-        # [EN] Builder "click to place atom" mode -- see the note in
-        # mouse_released() for why this can't be called from there
-        # directly (no guaranteed-current GL context outside render()).
-        # Mirrors the self.picking / self._pick() pattern immediately
-        # above: mouse_released() only sets a flag + the click
-        # coordinates; the actual GL work (handle_click_to_place_atom(),
-        # which reads the depth buffer via a real draw pass) only runs
-        # here, where GTK guarantees the context is current.
-        if getattr ( self, "builder_placing_atom", False ):
-            from gui.windows.builder.click_mode import handle_click_to_place_atom
-            handle_click_to_place_atom ( self, self.builder_click_x, self.builder_click_y )
-            self.builder_placing_atom = False
-        # [EN] Builder "delete atom" tool -- unlike "add" (handled
-        # entirely above via builder_placing_atom, no atom identification
-        # needed), "delete" needs to know WHICH atom was clicked, so it
-        # deliberately let the click fall through to normal self.picking
-        # / self._pick() above (see the comment in mouse_released()) --
-        # self.atom_picked is already set correctly by the time we get
-        # here. Only acts when the tool is actually 'delete', so a normal
-        # (non-Builder) click-to-select still works exactly as before.
-        if ( getattr ( self.vm_session, "builder_atom_mode", False )
-             and getattr ( self.vm_session, "builder_tool", "add" ) == "delete"
-             and self.atom_picked is not None ):
-            from gui.windows.builder.click_mode import handle_click_to_delete_atom
-            handle_click_to_delete_atom ( self )
-        
-        #print('self.dragging', self.dragging)
-        
-        GL.glClearColor(self.bckgrnd_color[0], self.bckgrnd_color[1],
-                        self.bckgrnd_color[2], self.bckgrnd_color[3])
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        # Atualiza view/proj no UBO uma unica vez por frame (Gargalo 2).
-        # Todos os shaders convertidos leem deste buffer compartilhado.
-        self.update_camera_ubo()
-        
+        # [EN] BUG FIXED (reported by the user after testing frame
+        # navigation): this coordinate-dirty-flagging block used to sit
+        # much further down in render(), AFTER self._selection_box_pick(),
+        # self._pick(), AND every Builder deferred picking check
+        # (builder_checking_press/builder_ctrl_checking_press/
+        # builder_hover_checking) -- all of which call
+        # draw_background_sel_representation() themselves, which only
+        # refreshes a representation's sel_coord_vbo when THIS block has
+        # already set was_sel_coord_modified=True for it. On the exact
+        # render() call where a trajectory frame just advanced
+        # (vm_session.forward_frame()/reverse_frame() setting
+        # self.updated_coords=True), every one of those picking passes
+        # would run BEFORE this block ever got a chance to mark anything
+        # dirty -- reading whatever STALE positions were left over from
+        # the PREVIOUS frame instead. Moved to the very top of render(),
+        # before any picking pass whatsoever, so a frame change is always
+        # fully reflected before anything tries to pick against it, no
+        # matter which of those picking paths happens to also be pending
+        # on that same render() call. Same reasoning _pick() already
+        # applies to itself for the camera UBO specifically (see its own
+        # comment: "O picking roda ANTES do update_camera_ubo() do render()
+        # principal... logo atualizamos agora") -- this fixes the
+        # equivalent problem for coordinates.
         if self.updated_coords:
             for vm_object in self.vm_session.vm_objects_dic.values():
                 if vm_object.core_representations["picking_dots"] is None:
@@ -779,6 +1134,99 @@ class VismolGLCore:
                         if rep.is_dynamic:
                             rep.was_rep_ind_modified = True
                             rep.was_sel_ind_modified = True
+        if self.selection_box_picking:
+            self._selection_box_pick()
+        if self.picking:
+            self._pick()
+        # [EN] Builder "click to place atom" mode -- see the note in
+        # mouse_released() for why this can't be called from there
+        # directly (no guaranteed-current GL context outside render()).
+        # Mirrors the self.picking / self._pick() pattern immediately
+        # above: mouse_released() only sets a flag + the click
+        # coordinates; the actual GL work (click_mode.handle_click_to_place_atom(),
+        # which reads the depth buffer via a real draw pass) only runs
+        # here, where GTK guarantees the context is current.
+        if getattr ( self, "builder_placing_atom", False ):
+            click_mode.handle_click_to_place_atom ( self, self.builder_click_x, self.builder_click_y )
+            self.builder_placing_atom = False
+        # [EN] Builder "click-and-drag to create a bonded atom" -- see
+        # the note added to mouse_pressed() for why this has to be
+        # resolved here (GL context only guaranteed current inside
+        # render(), same reasoning as builder_placing_atom right above).
+        # Only records a CANDIDATE atom (on vm_session, consumed by
+        # mouse_motion()) if the press actually landed on an atom
+        # belonging to the CURRENT Builder target object -- pressing on
+        # empty space, or on an atom from a different object, leaves the
+        # candidate at None, and the interaction falls back to whatever
+        # mouse_released() ends up doing with that press/release pair.
+        # Deliberately does NOT start the drag itself here (that used to
+        # be a bug: it made EVERY press-on-an-atom immediately create a
+        # new bonded atom, even a plain click with no real drag,
+        # breaking the "click on an atom -> replace its element"
+        # interaction, which depends on NO drag having happened) -- see
+        # mouse_motion() for where the candidate actually turns into a
+        # live drag, only once genuine mouse movement confirms the user
+        # is dragging, not just clicking.
+        if getattr ( self, "builder_checking_press", False ):
+            self.builder_checking_press = False
+            if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                 and getattr ( self.vm_session, "builder_tool", "add" ) in ( "add", "move" ) ):
+                pressed_atom, depth = click_mode._read_depth_and_atom_at_pixel ( self, self.builder_press_x, self.builder_press_y )
+                target_object = getattr ( self.vm_session, "builder_target_object", None )
+                if pressed_atom is not None and depth is not None and pressed_atom.vm_object is target_object:
+                    self.vm_session.builder_press_candidate_atom  = pressed_atom
+                    self.vm_session.builder_press_candidate_depth = depth
+        # [EN] Builder "Ctrl+drag to reposition an existing atom" -- same
+        # deferred-pick reasoning as builder_checking_press just above,
+        # just for the Ctrl-modified press instead of the plain one.
+        if getattr ( self, "builder_ctrl_checking_press", False ):
+            self.builder_ctrl_checking_press = False
+            if ( getattr ( self.vm_session, "builder_atom_mode", False )
+                 and getattr ( self.vm_session, "builder_tool", "add" ) == "add" ):
+                pressed_atom, depth = click_mode._read_depth_and_atom_at_pixel ( self, self.builder_ctrl_press_x, self.builder_ctrl_press_y )
+                target_object = getattr ( self.vm_session, "builder_target_object", None )
+                if pressed_atom is not None and depth is not None and pressed_atom.vm_object is target_object:
+                    self.vm_session.builder_ctrl_press_candidate_atom  = pressed_atom
+                    self.vm_session.builder_ctrl_press_candidate_depth = depth
+        # [EN] "Hover -> print which atom + draw a highlight ring" --
+        # resolves the throttled request from mouse_motion() (see that
+        # hook's own comment for the full reasoning: a real GPU pick,
+        # deferred here for the GL-context reason, throttled by time
+        # there so this doesn't run on every motion event). Works ANY
+        # TIME (not gated on builder_atom_mode), over EVERY active object
+        # in the session -- _read_depth_and_atom_at_pixel() already
+        # iterates vm_session.vm_objects_dic.values() itself, so no
+        # per-object loop is needed here.
+        if getattr ( self, "builder_hover_checking", False ):
+            self.builder_hover_checking = False
+            hovered_atom, _hover_depth = click_mode._read_depth_and_atom_at_pixel (
+                    self, self.builder_hover_check_x, self.builder_hover_check_y )
+            if hovered_atom is not getattr ( self, "builder_hover_atom", None ):
+                self.builder_hover_atom = hovered_atom
+                if hovered_atom is not None:
+                    print ( "DEBUG click_mode: hovering atom #{} ('{}') of object '{}'".format (
+                            hovered_atom.atom_id, hovered_atom.symbol, hovered_atom.vm_object.name ) )
+        # [EN] Builder "delete atom" tool -- unlike "add" (handled
+        # entirely above via builder_placing_atom, no atom identification
+        # needed), "delete" needs to know WHICH atom was clicked, so it
+        # deliberately let the click fall through to normal self.picking
+        # / self._pick() above (see the comment in mouse_released()) --
+        # self.atom_picked is already set correctly by the time we get
+        # here. Only acts when the tool is actually 'delete', so a normal
+        # (non-Builder) click-to-select still works exactly as before.
+        if ( getattr ( self.vm_session, "builder_atom_mode", False )
+             and getattr ( self.vm_session, "builder_tool", "add" ) == "delete"
+             and self.atom_picked is not None ):
+            click_mode.handle_click_to_delete_atom ( self )
+        
+        #print('self.dragging', self.dragging)
+        
+        GL.glClearColor(self.bckgrnd_color[0], self.bckgrnd_color[1],
+                        self.bckgrnd_color[2], self.bckgrnd_color[3])
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        # Atualiza view/proj no UBO uma unica vez por frame (Gargalo 2).
+        # Todos os shaders convertidos leem deste buffer compartilhado.
+        self.update_camera_ubo()
         
         '''
                            - - -  R E P R E S E N T A T I O N S - - -  
@@ -862,6 +1310,18 @@ class VismolGLCore:
         if self.show_axis:
             self.axis._draw(True)
             self.axis._draw(False)
+
+        # [EN] Builder "hover -> highlight ring" -- see click_mode.
+        # draw_hover_highlight()'s own docstring. Drawn last (after every
+        # other representation, axis, selection box) so it isn't
+        # accidentally covered by anything -- it still respects normal
+        # depth testing against the actual scene geometry (GL_DEPTH_TEST
+        # stays enabled inside draw_hover_highlight() itself), it's just
+        # not competing with any OTHER overlay for draw order here.
+        hovered_atom = getattr(self, "builder_hover_atom", None)
+        if hovered_atom is not None:
+            world_center, hover_up, hover_radius = click_mode.draw_hover_highlight(self, hovered_atom)
+            click_mode.draw_hover_info_text(self, hovered_atom, world_center, hover_up, hover_radius)
 
         # Fecha o cronometro do frame e reporta periodicamente. Medimos so o
         # tempo de CPU/submissao (sem glFinish, que serializaria a GPU e

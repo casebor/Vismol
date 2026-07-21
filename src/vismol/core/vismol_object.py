@@ -183,6 +183,64 @@ class VismolObject:
         self.cell_colors      = None
         self.cell_bonds       = None
         self.representations['labels'] = None
+
+        # ------------------------------------------------------------------
+        # [EN] AUDIT (requested explicitly): every attribute found anywhere
+        # in the codebase being SET on a VismolObject instance (self.X in
+        # this file's own methods, or vismol_object.X/vm_object.X elsewhere)
+        # but that was never declared here in __init__ -- meaning a FRESH
+        # object (one that hasn't yet gone through whichever code path first
+        # assigns each of these) would raise AttributeError on read before
+        # that. Declared here as None (exactly as requested -- not a
+        # type-appropriate default like False/{}/[] for the ones that would
+        # normally suggest one, e.g. is_builder_only), so every VismolObject
+        # has a well-defined value for all of these from the moment it's
+        # constructed, regardless of which code path (if any) touches it
+        # afterwards. Grouped by where each one actually gets assigned, for
+        # anyone maintaining this list later.
+
+        # -- Builder / undo (gui/windows/builder/{atom_ops,empty_object}.py) --
+        self.manual_bonds       = None  # atom_ops.py: set of (atom_id_a, atom_id_b) explicit bonds
+        self.manual_bond_orders = None  # atom_ops.py: {(atom_id_a, atom_id_b): order}
+        self.undo_stack         = None  # atom_ops.py: list of snapshots (push_undo_snapshot/undo)
+        self.e_id               = None  # empty_object.py (also pDynamo2EasyHybrid/session.py for normal objects): pDynamo psystem index, None for builder-only objects
+        self.is_builder_only    = None  # empty_object.py: True for objects created by the Builder (no pDynamo system backing them)
+        self.key6               = None  # empty_object.py: short random tag used as part of this object's unique display name
+
+        # -- eSession / treeview / GUI bookkeeping (gui/main/*.py, pdynamo/pDynamo2EasyHybrid/session.py) --
+        self.e_treeview_iter            = None  # main_treeview.py: Gtk.TreeIter for this object's row in the main treeview
+        self.e_treeview_iter_parent_key = None  # main_treeview.py: key of the parent row, for nested/grouped objects
+        self.liststore_iter             = None  # main_window.py: Gtk.TreeIter for this object's row in a liststore-based widget
+        self.is_surface                 = None  # main_treeview.py: True for surface/grid objects (as opposed to atomistic ones)
+        self.e_sequence                 = None  # util/sequence_plot.py: cached sequence-plot data for this object
+
+        # -- Surface/MEP analysis (gui/windows/analysis/surface_analysis_window.py) --
+        self.mep_cmap_name     = None  # colormap name used for the last Molecular Electrostatic Potential rendering
+        self.mep_vmin          = None  # MEP colour-scale lower bound
+        self.mep_vmax          = None  # MEP colour-scale upper bound
+        self.surface_trajectory = None # surface/grid frames, analogous to `frames` for atomistic trajectories
+
+        # -- pDynamo integration (pdynamo/pDynamo2EasyHybrid/*.py) --
+        self.normal_modes_dict = None  # import_trajectory.py: parsed normal-mode data, keyed by mode index
+        self.results           = None  # simulations_mixin.py: last simulation's result payload
+
+        # -- Rendering: per-atom colour arrays (this file's own
+        #    _generate_color_vectors(), called by e.g. atom_ops.add_atom()) --
+        self.colors        = None  # np.float32[n_atoms, 3] -- current display colour per atom
+        self.color_indexes = None  # np.float32[n_atoms, 3] -- picking-ID colour per atom (see Atom._generate_atom_unique_color_id())
+        self.color_rainbow = None  # np.float32[n_atoms, 3] -- rainbow/spectrum colour-by-index variant
+        self.cov_dot_sizes = None  # np.float32[n_atoms]    -- covalent-radius-derived point size, per atom
+        self.vdw_dot_sizes = None  # np.float32[n_atoms]    -- van-der-Waals-radius-derived point size, per atom
+
+        # -- Rendering: ribbons/dot-surface GPU buffers (libgl/shapes.py) --
+        self.ribbons_vao             = None
+        self.ribbons_buffers         = None
+        self.dots_surface_vao        = None
+        self.dots_surface_buffers    = None
+        self.sel_dots_surface_vao     = None
+        self.sel_dots_surface_buffers = None
+        # ------------------------------------------------------------------
+
     
     
     def build_core_representations(self):
@@ -891,9 +949,21 @@ class VismolObject:
                 #    (Convenção B: lista já filtrada, então o k-ésimo
                 #     sobrevivente casa com external_orders[k]);
                 #  - senão, cai no palpite geométrico (UFF).
+                #
+                # [EN] BUG FIX: this branch used to be a no-op ("pass",
+                # with the actual assignment commented out) -- passing
+                # external_orders had ZERO effect, bond.bond_order always
+                # stayed at Bond.__init__'s default (1), regardless of
+                # what was passed in. Also used `n` (never incremented,
+                # always 0) instead of bond_pair_idx (the correct,
+                # already-filtered counter -- see the comment above:
+                # "Convencao B", the index into external_orders that's
+                # actually aligned with non-excluded bonds). Found while
+                # wiring up the Builder's bond-order-cycling feature
+                # (click_mode.py), which relies on this actually working
+                # to persist a manually-set order across rebuilds.
                 if external_orders is not None:
-                    pass
-                    #bond.bond_order = int(external_orders[n])
+                    bond.bond_order = int(external_orders[bond_pair_idx])
                 else:
                     #print('standard bond.get_bond_order')
                     bond.get_bond_order()
