@@ -1,10 +1,11 @@
+from vismol.utils.debug import dprint
 import yaml
 import os, pprint
 elements_path = os.path.abspath(__file__)
 #HOME = os.path.split(HOME)
 elements_path, _file = os.path.split(elements_path)
 elements_path = os.path.join(elements_path, 'elements')
-print('\n\n',elements_path)# = os.path.abspath(__dir__)
+dprint('\n\n',elements_path)# = os.path.abspath(__dir__)
 
 files  = os.listdir(elements_path)
 
@@ -35,7 +36,7 @@ for anum in range(1,119):
     rcov = elements_by_number[anum]['Covalent Radius']
     vdw  = elements_by_number[anum]['vdW Radius']
     
-    print('{:2} : {:3} , {:15s} , {} , {:9.5f}, {:4.3f} {:4.3f}'.   format(sym, num,name, rgb, mass,  rcov,vdw ))
+    dprint('{:2} : {:3} , {:15s} , {} , {:9.5f}, {:4.3f} {:4.3f}'.   format(sym, num,name, rgb, mass,  rcov,vdw ))
     
     #try:
     #    print(anum,  

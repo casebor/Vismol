@@ -31,6 +31,7 @@
 #import VISMOL.glCore.vismol_shaders as vm_shader
 #import VISMOL.glCore.matrix_operations as mop
 
+from vismol.utils.debug import dprint
 import gi, sys
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk
@@ -222,7 +223,7 @@ class PlayerFrame:
         if tree_iter is not None:
             model = combo.get_model()
             row_id, name = model[tree_iter][:2]
-            print(model[tree_iter][:])
+            dprint(model[tree_iter][:])
             number_of_frames = model[tree_iter][4]
             self.scale.set_range(0, int(number_of_frames)-1)
             #print("Selected: ID=%d, name=%s" % (row_id, name))
@@ -239,7 +240,7 @@ class PlayerFrame:
         value = value+1
         self.scale.set_value(int(value))
         self.vismol_session.set_frame(int(value))
-        print(value)
+        dprint(value)
 
     def reverse (self, button):
         """ Function doc """
@@ -252,7 +253,7 @@ class PlayerFrame:
 
         self.vismol_session.set_frame(int(value))
         self.scale.set_value(value)
-        print(value)
+        dprint(value)
 
     def on_button_print (self, button):
         """ Function doc """
@@ -266,7 +267,7 @@ class PlayerFrame:
             self.scale.set_value(int(value))
             time.sleep(0.1)
             
-            print(value)
+            dprint(value)
         #self.scale.set_range(10  , 90)
         #self.scale.set_digits(0)
 

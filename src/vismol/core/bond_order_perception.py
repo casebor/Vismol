@@ -26,6 +26,7 @@ API principal:
 Este modulo nao depende de numpy; usa apenas a biblioteca padrao.
 """
 
+from vismol.utils.debug import dprint
 from collections import defaultdict
 
 
@@ -361,15 +362,15 @@ if __name__ == "__main__":
 
     def show(name, elements, bonds, expected=None):
         order, tps = perceive_bond_orders(elements, bonds)
-        print("\n== %s == (tps=%d)" % (name, tps))
+        dprint("\n== %s == (tps=%d)" % (name, tps))
         for b in sorted(order):
             i, j = b
-            print("  %2d(%s) - %2d(%s) : %d" % (
+            dprint("  %2d(%s) - %2d(%s) : %d" % (
                 i, elements[i], j, elements[j], order[b]))
         if expected is not None:
             got = {b: order[b] for b in order}
             ok = all(got.get(_normalize(*k)) == v for k, v in expected.items())
-            print("  -> expected:", "OK" if ok else "MISMATCH")
+            dprint("  -> expected:", "OK" if ok else "MISMATCH")
 
     # Etano CH3-CH3 : tudo simples
     show("etano",
@@ -412,7 +413,7 @@ if __name__ == "__main__":
          [(0,1),(1,2),(2,3),(3,4),(4,5),(5,0),
           (0,6),(1,7),(2,8),(3,9),(4,10),(5,11)])
 
-    print("\n--- casos dificeis ---")
+    dprint("\n--- casos dificeis ---")
 
     # Acido acetico CH3-COOH : C=O (dupla) e C-O-H (simples)
     show("acido acetico",
@@ -456,7 +457,7 @@ if __name__ == "__main__":
           (4,6),(6,7),(7,8),(8,9),(9,5),         # anel 2 (compartilha 4-5)
           (0,10),(1,11),(2,12),(3,13),(6,14),(7,15),(8,16),(9,17)])
 
-    print("\n--- oxianions e zwitterions ---")
+    dprint("\n--- oxianions e zwitterions ---")
 
     # Sulfato SO4(2-) : S central, 4 O terminais. S hipervalente, 2 duplas
     show("sulfato",

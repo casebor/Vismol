@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import os
 import time
 import numpy as np
@@ -71,7 +72,7 @@ def _load_pdb_file(vismol_session, infile):
     atom_id = 0
     
 
-    print('\n\n\n')
+    dprint('\n\n\n')
     pprint(topo)
 
     
@@ -98,9 +99,9 @@ def _load_pdb_file(vismol_session, infile):
         unique_id += 1
     logger.debug("Time used to build the tree: {:>8.5f} secs".format(time.time() - initial))
     vm_object.frames = PDBFiles.get_coords_from_raw_frames(rawframes, atom_id, vismol_session.vm_config.n_proc)
-    print(type(vm_object.frames))
-    print(vm_object.frames)
-    print('\n\n\n')
+    dprint(type(vm_object.frames))
+    dprint(vm_object.frames)
+    dprint('\n\n\n')
     vm_object.mass_center = np.mean(vm_object.frames[0], axis=0)
     vm_object.find_bonded_and_nonbonded_atoms()
     return vm_object

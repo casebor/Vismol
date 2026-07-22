@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import os
 import time
 import multiprocessing
@@ -12,7 +13,7 @@ from vismol.core.vismol_object import VismolObject
 
 def load_mol2_files(infile=None, vismol_session=None, gridsize=3):
     """ Function doc """
-    print ('\nstarting: parse_mol2')
+    dprint ('\nstarting: parse_mol2')
 
     #at  = MolecularProperties.AtomTypes()
     with open(infile, 'r') as mol2_file:
@@ -29,7 +30,7 @@ def load_mol2_files(infile=None, vismol_session=None, gridsize=3):
     raw_atoms = raw_atoms.split('\n')
     bonds     = bonds.split('\n')
 
-    print (raw_atoms)
+    dprint (raw_atoms)
     atoms, frames = get_atom_list_from_mol2_frame(raw_atoms = raw_atoms, frame = True)#,  gridsize = gridsize,  at = at)
 
     #-------------------------------------------------------------------------------------------

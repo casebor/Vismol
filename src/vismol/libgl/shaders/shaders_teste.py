@@ -1,3 +1,4 @@
+from vismol.utils.debug import dprint
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
@@ -93,6 +94,6 @@ void main(){
 }
 
 for label in shaders:
-	print (label)
-	print (shaders[label])
+	dprint (label)
+	dprint (shaders[label])
 #print shaders['vertex_shader_lines']

@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import time
 import numpy as np
 from logging import getLogger
@@ -642,7 +643,7 @@ class VismolObject:
             
             
             final = time.time()
-            print('        Defining molecule indexes: ', final - initial)
+            dprint('        Defining molecule indexes: ', final - initial)
             
             # Define Calpha backbone atoms
             self.define_Calpha_backbone()
@@ -700,7 +701,7 @@ class VismolObject:
             
             index_i = self.index_bonds[i]    # Get the first atom's index of the bond
             index_j = self.index_bonds[i+1]  # Get the second atom's index of the bond
-            print(index_i, index_j)
+            dprint(index_i, index_j)
             is_excluded = False
             
             for excluded_bond in exclude_list: 
@@ -730,7 +731,7 @@ class VismolObject:
                 #  - senão, cai no palpite geométrico (UFF).
                 if external_orders is not None:
                     #bond.bond_order = int(external_orders[bond_pair_idx])
-                    print('here')
+                    dprint('here')
                     bond.bond_order = int(external_orders[i])+1
                 else:
                     bond.get_bond_order()
@@ -1301,14 +1302,14 @@ class VismolObject:
 
         for i, vertex in enumerate(vertices, 0):
         
-            print("Vertex {}: {:7.3f} {:7.3f} {:7.3f}".format(i, vertex[0] ,vertex[1] ,vertex[2]))
+            dprint("Vertex {}: {:7.3f} {:7.3f} {:7.3f}".format(i, vertex[0] ,vertex[1] ,vertex[2]))
             self.cell_indexes.append(i)
             
             self.cell_colors[i] = np.array(color, dtype=np.float32)
             self.cell_coordinates[0,i,:] = vertex[0] ,vertex[1] ,vertex[2]  
             
 
-        print('\n\n')
+        dprint('\n\n')
         #print (self.cell_colors)
 
 

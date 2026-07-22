@@ -4,6 +4,7 @@
 #  Copyright 2021 Carlos Eduardo Sequeiros Borja <carseq@amu.edu.pl>
 #  
 
+from vismol.utils.debug import dprint
 import numpy as np
 import vismol.utils.matrix_operations as mop
 
@@ -569,7 +570,7 @@ def cartoon(visObj, spline_detail=3, SSE_list = []):
     
     #secstruc = secstruc[1]
     #secstruc(0) 
-    print (secstruc)        
+    dprint (secstruc)        
     #'''
     coords  = np.zeros([1,3], dtype=np.float32)
     normals = np.zeros([1,3], dtype=np.float32)
@@ -657,8 +658,8 @@ def cartoon(visObj, spline_detail=3, SSE_list = []):
     # per-vertex normals FROM the actual mesh triangles, which is the
     # textbook-correct approach and the one actually restored here.
     normals = make_normals(coords, indexes)
-    print('len:')
-    print(spline.shape, coords.shape, normals.shape, colors.shape, indexes.shape)
+    dprint('len:')
+    dprint(spline.shape, coords.shape, normals.shape, colors.shape, indexes.shape)
     return coords, normals, indexes, colors
 
 def bezier_curve(p1, p2, p3, bezier_detail):
@@ -727,7 +728,7 @@ def calculate_secondary_structure(visObj):
             itself was already correct (it takes raw points and does
             the subtraction internally), so `ai` was fine before and
             after.
-          - Removed several leftover debug print() calls (an unconditional
+          - Removed several leftover debug dprint() calls (an unconditional
             per-atom dump, a per-residue dump inside the classification
             loop, and a couple of SSE-string dumps) that would have
             spammed the console on every single secondary-structure

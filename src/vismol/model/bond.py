@@ -139,6 +139,7 @@
 
 
 
+from vismol.utils.debug import dprint
 import numpy as np
 import math
 
@@ -281,7 +282,7 @@ class Bond:
                 distance - self.bond_reference[order]
             )
         )
-        print(self.atom_i.name,self.atom_j.name ,distance, self.bond_reference, self.bond_order)
+        dprint(self.atom_i.name,self.atom_j.name ,distance, self.bond_reference, self.bond_order)
         return self.bond_order
 
 

@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import time
 import numpy as np
 from vismol.utils import matrix_operations as mop
@@ -422,13 +423,13 @@ class VismolPickingSelection:
                 self.xyz3 = atom3.coords()
 
                 self.get_angle_pk1_pk2_pk3()
-                print ("Angle: ", self.theta_deg)
+                dprint ("Angle: ", self.theta_deg)
                 text =  "Angle: "+ str(self.theta_deg)
 
                 if atom4:
                     self.xyz4 = atom4.coords()
                     angle = mop.dihedral(self.xyz1, self.xyz2, self.xyz3, self.xyz4)
-                    print ("Dihedral: ", angle*57.297)
+                    dprint ("Dihedral: ", angle*57.297)
                     
                     #devemos melhorar isso depois
                     vobject  = atom2.vm_object
@@ -461,7 +462,7 @@ class VismolPickingSelection:
             self.dist_pk2_pk3, self.mid_point_pk2_pk3 =  self.get_dist ( self.xyz2, self.xyz3)
             self.vm_session.vm_geometric_object_dic["pk2pk3"].midpoint = self.mid_point_pk2_pk3
             self.vm_session.vm_geometric_object_dic["pk2pk3"].dist = self.dist_pk2_pk3
-            print(self.xyz2,self.xyz3,self.dist_pk2_pk3, self.mid_point_pk2_pk3)
+            dprint(self.xyz2,self.xyz3,self.dist_pk2_pk3, self.mid_point_pk2_pk3)
         else:
             if self.vm_session.vm_geometric_object_dic["pk2pk3"]:
                 self.vm_session.vm_geometric_object_dic["pk2pk3"].representations["dash"].active = False
@@ -480,7 +481,7 @@ class VismolPickingSelection:
         n = 1
         for atom in self.picking_selections_list:
             label = "pk"+str(n)
-            print(label, atom)
+            dprint(label, atom)
             
             if atom:
                 
@@ -777,7 +778,7 @@ class VismolPickingSelection:
                     #print("atom", name1, "atom", name2,  dist)
 
             c += 1
-        print(text)
+        dprint(text)
 
 
 

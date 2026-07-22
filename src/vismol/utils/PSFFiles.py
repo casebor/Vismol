@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import os
 import numpy as np
 from vismol.core.vismol_object import VismolObject
@@ -82,7 +83,7 @@ def load_PSF_topology_file(infile=None, vismol_session=None, gridsize=3):
                 if len(line2)> 6:
                     
                     for i in range(0, len(line2),2):
-                        print(int(line2[i]), int(line2[i+1]))
+                        dprint(int(line2[i]), int(line2[i+1]))
                         #print(line2[i:i+2])
                         bonds.append(int(line2[i])-1)
                         bonds.append(int(line2[i+1])-1)

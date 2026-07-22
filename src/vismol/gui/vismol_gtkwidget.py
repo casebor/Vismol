@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
@@ -86,10 +87,10 @@ class VismolGTKWidget(Gtk.GLArea):
                          program will be changed change this value to True
         """
         if self.get_error() != None:
-            print(self.get_error().args)
-            print(self.get_error().code)
-            print(self.get_error().domain)
-            print(self.get_error().message)
+            dprint(self.get_error().args)
+            dprint(self.get_error().code)
+            dprint(self.get_error().domain)
+            dprint(self.get_error().message)
             Gtk.main_quit()
         self.vm_glcore.initialize()
     
@@ -251,7 +252,7 @@ class VismolGTKWidget(Gtk.GLArea):
         if getattr ( self.vm_session, "builder_atom_mode", False ):
             from gui.windows.builder.click_mode import set_tool
             set_tool ( self.vm_session, "add" )
-            print ( "Builder: tool = add atom" )
+            dprint ( "Builder: tool = add atom" )
 
     def _pressed_d(self):
         """ Builder: switch to the "delete atom" tool (plain click
@@ -259,7 +260,7 @@ class VismolGTKWidget(Gtk.GLArea):
         if getattr ( self.vm_session, "builder_atom_mode", False ):
             from gui.windows.builder.click_mode import set_tool
             set_tool ( self.vm_session, "delete" )
-            print ( "Builder: tool = delete atom" )
+            dprint ( "Builder: tool = delete atom" )
 
     def _pressed_b(self):
         """ Builder: one-shot action -- adds a bond between the two
@@ -268,7 +269,7 @@ class VismolGTKWidget(Gtk.GLArea):
         if getattr ( self.vm_session, "builder_atom_mode", False ):
             from gui.windows.builder.click_mode import handle_bond_shortcut
             msg = handle_bond_shortcut ( self.vm_session )
-            print ( "Builder: {}".format ( msg ) )
+            dprint ( "Builder: {}".format ( msg ) )
             self.queue_draw ( )
     
     def _selection_type_picking(self, widget):
@@ -516,7 +517,7 @@ class VismolGTKWidget(Gtk.GLArea):
         self.make_current()
 
         if self.get_error() is not None:
-            print("Error in OpenGL context")
+            dprint("Error in OpenGL context")
             return None
 
         if scale_factor != 1:
@@ -576,7 +577,7 @@ class VismolGTKWidget(Gtk.GLArea):
         # to drop the molecule into another image/slide).
         img = Image.fromarray(image, mode="RGBA")
         img.save(filename)
-        print("Imagem salva em {}".format(filename))
+        dprint("Imagem salva em {}".format(filename))
         return True
 
     def open_export_preview(self):
@@ -991,7 +992,7 @@ class PreviewWindow(Gtk.Window):
 
     def on_refresh_image (self, widget):
         """ Function doc """
-        print('Refresh image')
+        dprint('Refresh image')
         image = self.glwidget.capture_screenshot()
         self.preview_base =  Image.fromarray(image)
         self.update_preview()

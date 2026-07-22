@@ -23,6 +23,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import os
 import numpy as np
 from vismol.utils import parser
@@ -381,13 +382,13 @@ class VismolSession(Config):
             new_bonds = []
 
             for index in range (0,len(bonds), 2):
-                print(bonds[index], bonds[index+1])
+                dprint(bonds[index], bonds[index+1])
                 
                 if [bonds[index], bonds[index+1]] in new_bonds or [bonds[index+1], bonds[index]] in new_bonds:
                     pass
                 else:
                     new_bonds.append([bonds[index], bonds[index+1]])
-            print(new_bonds)
+            dprint(new_bonds)
             #bonds = []
             bonds = [item for sublista in new_bonds for item in sublista]
             #for b in new_bonds:

@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import numpy as np
 import freetype as ft
 import ctypes
@@ -162,20 +163,20 @@ class VismolFont():
     def print_all(self):
         """ Function created only with debuging purposes.
         """
-        print("#############################################")
-        print(self.font_file, "font_file")
-        print(self.char_res, "char_res")
-        print(self.char_width, "char_width")
-        print(self.char_height, "char_height")
-        print(self.offset, "offset")
-        print(self.color, "color")
-        print(self.font_buffer, "font_buffer")
-        print(self.texture_id, "texture_id")
-        print(self.text_u, "text_u")
-        print(self.text_v, "text_v")
-        print(self.vao, "vao")
-        print(self.text_vbo, "text_vbo")
-        print(self.coord_vbo, "coord_vbo")
+        dprint("#############################################")
+        dprint(self.font_file, "font_file")
+        dprint(self.char_res, "char_res")
+        dprint(self.char_width, "char_width")
+        dprint(self.char_height, "char_height")
+        dprint(self.offset, "offset")
+        dprint(self.color, "color")
+        dprint(self.font_buffer, "font_buffer")
+        dprint(self.texture_id, "texture_id")
+        dprint(self.text_u, "text_u")
+        dprint(self.text_v, "text_v")
+        dprint(self.vao, "vao")
+        dprint(self.text_vbo, "text_vbo")
+        dprint(self.coord_vbo, "coord_vbo")
     
     
     def set_dimensions (self, width, height ):

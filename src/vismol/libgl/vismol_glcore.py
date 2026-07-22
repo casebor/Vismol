@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import time
 import numpy as np
 from OpenGL import GL
@@ -496,7 +497,7 @@ class VismolGLCore:
                     target_object = getattr ( self.vm_session, "builder_target_object", None )
                     if target_object is not None:
                         if self.atom_picked is not None and self.atom_picked.vm_object is target_object:
-                            print ( "DEBUG vismol_glcore: builder right-click delete -- atom #{} ('{}')".format (
+                            dprint ( "DEBUG vismol_glcore: builder right-click delete -- atom #{} ('{}')".format (
                                     self.atom_picked.atom_id, self.atom_picked.symbol ) )
                             atom_ops.push_undo_snapshot ( target_object )
 
@@ -547,7 +548,7 @@ class VismolGLCore:
                             # alvo sempre tem prioridade sobre uma ligacao)
                             bond = click_mode.find_bond_at_pixel ( self, target_object, mouse_x, mouse_y )
                             if bond is not None:
-                                print ( "DEBUG vismol_glcore: builder right-click delete -- bond #{} <-> #{}".format (
+                                dprint ( "DEBUG vismol_glcore: builder right-click delete -- bond #{} <-> #{}".format (
                                         bond.atom_index_i, bond.atom_index_j ) )
                                 atom_ops.push_undo_snapshot ( target_object )
                                 atom_a_obj = target_object.atoms[bond.atom_index_i]
@@ -1204,7 +1205,7 @@ class VismolGLCore:
             if hovered_atom is not getattr ( self, "builder_hover_atom", None ):
                 self.builder_hover_atom = hovered_atom
                 if hovered_atom is not None:
-                    print ( "DEBUG click_mode: hovering atom #{} ('{}') of object '{}'".format (
+                    dprint ( "DEBUG click_mode: hovering atom #{} ('{}') of object '{}'".format (
                             hovered_atom.atom_id, hovered_atom.symbol, hovered_atom.vm_object.name ) )
         # [EN] Builder "delete atom" tool -- unlike "add" (handled
         # entirely above via builder_placing_atom, no atom identification
@@ -1337,7 +1338,7 @@ class VismolGLCore:
                 avg_ms = avg_s * 1000.0
                 fps = (1.0 / avg_s) if avg_s > 0 else float("inf")
                 n_obj = len(self.vm_session.vm_objects_dic)
-                print("[FPS] {:.1f} fps | {:.3f} ms/render | {} objects | "
+                dprint("[FPS] {:.1f} fps | {:.3f} ms/render | {} objects | "
                       "average of {} frames".format(fps, avg_ms, n_obj,
                                                    self._fps_frame_count))
                 self._fps_frame_count = 0
@@ -1932,7 +1933,7 @@ class VismolGLCore:
                 self.atom_picked = atom
 
                 if self.button == 1:
-                    print(atom)
+                    dprint(atom)
                     self.vm_session._selection_function_set({atom})
                     self.button = None
             else:
@@ -2507,7 +2508,7 @@ class VismolGLCore:
                 
                 angle_1 = "angle 1-2-3: {:7.5f} ".format(angle_deg)
                 
-        print(text_d1, text_d2, text_d3, angle_1)
+        dprint(text_d1, text_d2, text_d3, angle_1)
                 #print(angle_deg)
         '''
 

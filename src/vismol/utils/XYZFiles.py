@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import os
 import time
 import multiprocessing
@@ -15,7 +16,7 @@ from vismol.model.residue  import *
  
 def load_xyz_file(infile=None, vismol_session=None, gridsize=3):
     """ Function doc """
-    print ("\nstarting: parse_mol2")
+    dprint ("\nstarting: parse_mol2")
     #at  =  MolecularProperties.AtomTypes()
 
     #initial = time.time()

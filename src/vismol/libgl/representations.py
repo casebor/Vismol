@@ -22,6 +22,7 @@
 #  
 #  update Bachega 2026
 
+from vismol.utils.debug import dprint
 import ctypes
 import numpy as np
 from OpenGL import GL
@@ -751,11 +752,11 @@ class SticksRepresentation(Representation):
         # chave nao existir no config.
         try:
             _mb = self.vm_session.vm_config.gl_parameters.get("multiple_bonds", "AUSENTE")
-            print("[multiple_bonds DEBUG] valor lido =", _mb)
+            dprint("[multiple_bonds DEBUG] valor lido =", _mb)
             if not self.vm_session.vm_config.gl_parameters.get("multiple_bonds", True):
                 return orders
         except Exception as _e:
-            print("[multiple_bonds DEBUG] error reading flag:", _e)
+            dprint("[multiple_bonds DEBUG] error reading flag:", _e)
         ib = getattr(self.vm_object, "index_bonds", None)
         bol = getattr(self.vm_object, "bond_order_list", None)
         if ib is None or bol is None:
@@ -2810,7 +2811,7 @@ class LabelRepresentation:
             self.vm_object.vm_font.make_freetype_texture(self.vm_glcore.freetype_program)
         
         if self.chars == 0:
-            print("self._build_buffer()")
+            dprint("self._build_buffer()")
             self._build_buffer()
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_object.vm_font.vbos[0])
         GL.glBufferData(GL.GL_ARRAY_BUFFER, self.xyz_pos.itemsize*len(self.xyz_pos), self.xyz_pos, GL.GL_DYNAMIC_DRAW)

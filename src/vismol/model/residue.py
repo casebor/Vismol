@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import numpy as np
 from vismol.model.molecular_properties import solvent_dictionary
 from vismol.model.molecular_properties import residues_dictionary
@@ -117,8 +118,8 @@ class Residue:
         if self.is_protein:
             dihedral_atoms = { 
                              } 
-            print(self.name,self.index) 
+            dprint(self.name,self.index) 
             for atom in self.atoms:
-                print(self.name, atom.name, atom.symbol, atom.coords(), atom.bonds, atom.connected2 )
+                dprint(self.name, atom.name, atom.symbol, atom.coords(), atom.bonds, atom.connected2 )
         else:
             pass

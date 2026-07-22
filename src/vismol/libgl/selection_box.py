@@ -22,6 +22,7 @@
 #  
 #  
 
+from vismol.utils.debug import dprint
 import ctypes
 import numpy as np
 from OpenGL import GL
@@ -114,10 +115,10 @@ void main(){
         GL.glAttachShader(self.selection_box_program, f_shader)
         GL.glLinkProgram(self.selection_box_program)
         if GL.glGetShaderiv(v_shader, GL.GL_COMPILE_STATUS) != GL.GL_TRUE:
-            print("Error compiling the shader: ", "GL_VERTEX_SHADER")
+            dprint("Error compiling the shader: ", "GL_VERTEX_SHADER")
             raise RuntimeError(GL.glGetShaderInfoLog(v_shader))
         if GL.glGetShaderiv(f_shader, GL.GL_COMPILE_STATUS) != GL.GL_TRUE:
-            print("Error compiling the shader: ", "GL_FRAGMENT_SHADER")
+            dprint("Error compiling the shader: ", "GL_FRAGMENT_SHADER")
             raise RuntimeError(GL.glGetShaderInfoLog(f_shader))
         return True
     

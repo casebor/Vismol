@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import os
 import time
 import numpy as np
@@ -60,7 +61,7 @@ def load_amber_crd_file (filein = None, visObj = None):
     
     data   = filein.readlines()
     line1  = data[1].split()
-    print(line1)
+    dprint(line1)
     #print(data)
     if int(float(line1[0])) == size/3:
         start = 2
@@ -215,7 +216,7 @@ def load_amber_topology_file (infile = None, vismolSession =  None, gridsize = 3
             for i in range(0, len(at_names)):
                 
                 if i <= pointers2[residue_counter]-1:
-                    print (pointers2[residue_counter]-1, residue_counter, pointers2, at_names[i],i )
+                    dprint (pointers2[residue_counter]-1, residue_counter, pointers2, at_names[i],i )
                     pass
 
                     #print (i+1, pointers, residue_counter, at_names[i], res_names_short[residue_counter-1])

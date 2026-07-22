@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
@@ -208,7 +209,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
         #self.BackUpWindowData()
         self.window.destroy()
         self.Visible    =  False
-        print('self.Visible',self.Visible)
+        dprint('self.Visible',self.Visible)
     
     def __init__(self, vismol_session = None):
         """ Class initialiser """
@@ -257,7 +258,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
             #print("Selected: country=%s" % country)
         
             self.current_filter_residue = residue
-            print("%s Chain selected!" % self.current_filter_residue)
+            dprint("%s Chain selected!" % self.current_filter_residue)
             # we update the filter, which updates in turn the view
             if self.residue_filter:
                 self.residue_filter.refilter()
@@ -280,7 +281,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
             #print("Selected: country=%s" % country)
         
         self.current_filter_chain = chain
-        print("%s Chain selected!" % self.current_filter_chain)
+        dprint("%s Chain selected!" % self.current_filter_chain)
         # we update the filter, which updates in turn the view
         self.chain_filter.refilter()
     
@@ -445,7 +446,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
         #print ( tree, event)
         
         if event.button == 3:
-            print (3)
+            dprint (3)
             #selection     = tree.get_selection()
             #model         = tree.get_model()
             #(model, iter) = selection.get_selected()
@@ -518,7 +519,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
       
     
     def on_chk_renderer_toggled(self, cell, path, model):
-        print(model[path][0])
+        dprint(model[path][0])
 
    
    
@@ -558,7 +559,7 @@ class VismolGoToAtomWindow2(Gtk.Window):
     #    print("Goodbye")
     def update (self):
         """ Function doc """
-        print('VismolGoToAtomWindow2 update')
+        dprint('VismolGoToAtomWindow2 update')
         pass
         #self.combobox_vobjects.set_active(-1)
 
@@ -630,7 +631,7 @@ class VismolSelectionTypeBox(Gtk.Box):
             state = "on"
             self.vm_session.picking_selection_mode = True
             button.set_label('Picking')
-            print(self.combobox_selection_type.get_active())
+            dprint(self.combobox_selection_type.get_active())
             self.vm_session._selection_function (None)
             self.vm_session.glwidget.vm_widget.queue_draw()
             
@@ -661,7 +662,7 @@ class VismolSelectionTypeBox(Gtk.Box):
     
     def update (self):
         """ Function doc """
-        print('VismolSelectionTypeBox update')
+        dprint('VismolSelectionTypeBox update')
 
 class VismolTrajectoryFrame(Gtk.Frame):
     """ Class doc """
@@ -759,7 +760,7 @@ class VismolTrajectoryFrame(Gtk.Frame):
         value = value+1
         self.scale.set_value(int(value))
         self.vm_session.set_frame(int(value))
-        print(value)
+        dprint(value)
 
     def reverse (self, button):
         """ Function doc """
@@ -772,7 +773,7 @@ class VismolTrajectoryFrame(Gtk.Frame):
         
         self.vm_session.set_frame(int(value))
         self.scale.set_value(value)
-        print(value)
+        dprint(value)
     
     def get_box (self):
         """ Function doc """
@@ -782,8 +783,8 @@ class VismolTrajectoryFrame(Gtk.Frame):
         
     def on_combobox_vobjects_changed (self, widget):
         """ Function doc """
-        print('\n\n',widget)
-        print('\n\n',widget.get_active())
+        dprint('\n\n',widget)
+        dprint('\n\n',widget.get_active())
         
         cb_index = widget.get_active()
         if cb_index in self.vm_session.vm_objects_dic:
@@ -803,7 +804,7 @@ class VismolTrajectoryFrame(Gtk.Frame):
 
     def update (self):
         """ Function doc """
-        print('VismolTrajectoryFrame update')
+        dprint('VismolTrajectoryFrame update')
         #for index , visObj in self.vismol_session.vm_objects_dic.items():
         #last_obj = len(self.vismol_session.vismol_objects) -1
         last_obj = len(self.vm_session.vm_objects_dic.items()) -1

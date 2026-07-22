@@ -1,3 +1,4 @@
+from vismol.utils.debug import dprint
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
@@ -65,7 +66,7 @@ class GtkMainTreeView():
         i = 1
         
         for vis_object in self.vismolSession.vismol_objects:
-            print ('\n\n',vis_object.name,'\n\n')
+            dprint ('\n\n',vis_object.name,'\n\n')
             
             if vis_object.actived:
                 actived = True
@@ -81,7 +82,7 @@ class GtkMainTreeView():
             i +=1
             n = n + 1
         self.treeView.set_model(model)
-        print ('load fuction finished')
+        dprint ('load fuction finished')
         
     
     
@@ -98,7 +99,7 @@ class GtkMainTreeView():
 
                 widget = self.builder.get_object('treeview_menu')
                 widget.popup(None, None, None, None, event.button, event.time)
-                print ('button == 3')
+                dprint ('button == 3')
 
 
         if event.button == 2:
@@ -107,7 +108,7 @@ class GtkMainTreeView():
             #(model, iter) = selection.get_selected()
             #pymol_object = model.get_value(iter, 0)
             self.refresh_gtk_main_self.treeView()
-            print ('button == 2')
+            dprint ('button == 2')
             
             #self.selectedID  = int(model.get_value(iter, 1))  # @+
             #self.vismolSession.center(Vobject_index = self.selectedID -1)
@@ -116,7 +117,7 @@ class GtkMainTreeView():
             selection     = tree.get_selection()
             model         = tree.get_model()
             (model, iter) = selection.get_selected()
-            print ('button == 1')
+            dprint ('button == 1')
 
             if iter != None:
                 #print model, iter

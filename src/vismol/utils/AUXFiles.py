@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 
+from vismol.utils.debug import dprint
 import os
 import time
 import multiprocessing
@@ -11,7 +12,7 @@ from vismol.core.vismol_object import VismolObject
 
 def load_aux_file(infile=None, vismol_session=None, gridsize=3):
     """ Function doc """
-    print ("\nstarting: parse_aux")
+    dprint ("\nstarting: parse_aux")
     #at  =  MolecularProperties.AtomTypes()
     #initial = time.time()
 
