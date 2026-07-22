@@ -1426,8 +1426,20 @@ class CellLineRepresentation:
     def _load_coord_vbo(self, coord_vbo=False, sel_coord_vbo=False):
         """ This function assigns the coordinates to 
         be drawn by the function  draw_representation"""
-        frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
+        _, f = self.vm_glcore._safe_frame_coords(self.vm_object)
         #frame = self.vm_object.cell_coordinates[0]
+
+        # . "f" is clamped against the atom trajectory length
+        #   (vm_object.frames), but the cell box may have fewer stored
+        #   frames than that -- e.g. a single static cell shown for a
+        #   multi-frame trajectory, or a cell recorded for only some frames
+        #   of an NPT run. Clamp separately here so we never index past
+        #   what cell_coordinates actually has (falls back to the last
+        #   known cell frame instead of crashing).
+        number_of_cell_frames = self.vm_object.cell_coordinates.shape[0]
+        if f >= number_of_cell_frames:
+            f = number_of_cell_frames - 1
+
         frame = self.vm_object.cell_coordinates[f]
         if coord_vbo:
             GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coord_vbo)
