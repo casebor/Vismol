@@ -1076,14 +1076,14 @@ class VismolObject:
             #print(atom.nbonds)
         
     
-        print(new_index_bonds)
+        #print(new_index_bonds)
         self._index_bonds_from_bonds_dict()
         
         #print(self.index_bonds)
         self.index_bonds = np.array(self.index_bonds, dtype=np.uint32)
        
-        print(self.bond_order_list)
-        print(self.bonds.keys())
+        #print(self.bond_order_list)
+        #print(self.bonds.keys())
         
         
         
@@ -1097,8 +1097,8 @@ class VismolObject:
         # inflava .nbonds alem do numero real de vizinhos do atomo).
         computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
         self.bond_order_list = computed_orders.tolist()
-        print(len(self.bond_order_list))
-        print(self.bond_order_list)
+        #print(len(self.bond_order_list))
+        #print(self.bond_order_list)
         
         # Sincroniza bond_order_list de volta para os objetos Bond em
         # self.bonds (representations.py le' bond.bond_order direto do
