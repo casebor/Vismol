@@ -1385,6 +1385,7 @@ class VismolGLCore:
             # to have rendered a fresh frame into it already).
             width = int(self.width)
             height = int(self.height)
+            GL.glFinish()  # mesma garantia de sincronizacao do caminho off-screen abaixo
             data = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
             image = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 4))
             return np.ascontiguousarray(np.flip(image, axis=0))
@@ -1447,6 +1448,20 @@ class VismolGLCore:
             GL.glViewport(0, 0, new_width, new_height)
             self.render()
 
+            # [BUG FIX] Sem isso, glReadPixels podia rodar antes do comando
+            # de desenho estar de fato completo na GPU -- normalmente
+            # mascarado por uma superficie PREENCHIDA (rasterizacao mais
+            # pesada, geralmente ja termina a tempo), mas exposto com
+            # wireframe (poucos pixels efetivos, o comando de desenho volta
+            # rapido demais do lado da CPU, driver/GPU-dependente). Reportado
+            # como "PNG exportado sai completamente preto (so o fundo)" ao
+            # exportar em 2x/3x/4x com uma superficie so' em modo wireframe
+            # -- funcionava normalmente em 1x (sem framebuffer off-screen,
+            # sem essa race). glFinish() bloqueia ate a GPU terminar TUDO
+            # que foi submetido, garantindo que o proprio framebuffer
+            # off-screen esta com o conteudo final antes de ler os pixels.
+            GL.glFinish()
+
             data = GL.glReadPixels(0, 0, new_width, new_height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
             image = np.frombuffer(data, dtype=np.uint8).reshape((new_height, new_width, 4))
             image = np.ascontiguousarray(np.flip(image, axis=0))
@@ -1472,10 +1487,27 @@ class VismolGLCore:
             if depth_rbo is not None:
                 GL.glDeleteRenderbuffers(1, [depth_rbo])
 
-            # The widget's own framebuffer is now the wrong size for the
-            # restored width/height until the next natural resize/render
-            # cycle - request one so the on-screen view doesn't look
-            # stretched if anything reads it before then.
+            # [BUG FIX] Antes so' chamava self.queue_draw() aqui -- mas
+            # isso e' ASSINCRONO (so' AGENDA um redraw pro GTK processar no
+            # proximo ciclo do loop principal, nao garante que aconteca
+            # antes do usuario ver/capturar o conteudo de novo). Como
+            # render_to_image() e' chamado de fora do callback "render" da
+            # propria GLArea (o clique de Export/Refresh acontece numa
+            # janela SEPARADA, PreviewWindow), o binding de FBO que o GTK/
+            # GDK considera "correto" pro proximo repaint natural pode nao
+            # bater com prev_fbo (capturado via GL_FRAMEBUFFER_BINDING fora
+            # do ciclo de render da propria GLArea -- nao confiavel em
+            # todo backend/compositor). Resultado pratico: a GLArea principal
+            # ficava em branco ate ALGO MAIS disparar um redraw de verdade
+            # (ex.: mudar o zoom) -- exatamente o sintoma relatado.
+            #
+            # Agora, alem de agendar o proximo redraw natural do GTK
+            # (queue_draw, mantido como rede de seguranca), forcamos um
+            # RE-RENDER SINCRONO aqui mesmo -- usando a largura/altura/
+            # projecao/FBO JA restaurados acima -- entao o conteudo on-screen
+            # ja sai correto imediatamente, sem depender do agendamento
+            # assincrono do GTK nem de nenhuma acao adicional do usuario.
+            self.render()
             self.queue_draw()
     
     def _create_sphere_selection (self):

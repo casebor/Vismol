@@ -536,6 +536,9 @@ class VismolGTKWidget(Gtk.GLArea):
         width = self.get_allocated_width()
         height = self.get_allocated_height()
 
+        # Mesma garantia de sincronizacao aplicada em vm_glcore.render_to_image
+        # -- garante que o desenho terminou de verdade na GPU antes da leitura.
+        glFinish()
         data = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
 
         # Converter para numpy
