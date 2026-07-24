@@ -178,6 +178,57 @@ class Representation:
         GL.glVertexAttribIPointer(att, 1, GL.GL_INT, 0, ctypes.c_void_p(0))
         return bo_vbo
     
+    def _make_gl_bond_order_texture_buffer(self, orders):
+        """ Cria uma Buffer Texture (GL_TEXTURE_BUFFER, formato R32UI) com uma
+            entrada de ordem de ligacao POR PRIMITIVA (nao por atomo/vertice).
+
+            Diferenca-chave em relacao ao antigo _make_gl_bond_order_buffer:
+            aquele era um atributo por-VERTICE, indexado pelo GL_ELEMENT_ARRAY_
+            BUFFER (index_bonds) -- ou seja, por ATOMO. Um atomo com duas
+            ligacoes de ordens diferentes so guardava UM valor (a solucao
+            antiga usava a maior ordem entre elas, o que na pratica parecia
+            "valencia maxima do atomo" em vez da ordem real de cada ligacao).
+
+            Aqui, 'orders' e simplesmente bond_order_list (uma ordem por
+            ligacao, na MESMA sequencia dos pares em index_bonds). No
+            geometry shader, o texel k e lido via gl_PrimitiveIDIn, que da o
+            indice da primitiva GL_LINES (== o k-esimo par de index_bonds)
+            sendo desenhada. Isso pareia ordem <-> par de index_bonds 1:1,
+            sem nenhuma ambiguidade por atomo compartilhado.
+
+            Retorna (buffer_id, texture_id). Ambos devem ser mantidos vivos
+            (guardados em self) e liberados/recriados quando o numero de
+            ligacoes mudar (ex.: Dynamic Bonds trocando de frame).
+        """
+        orders = np.ascontiguousarray(orders, dtype=np.uint32)
+        if orders.size == 0:
+            # Buffer Texture vazia (0 bytes) e invalida em alguns drivers;
+            # garante ao menos 1 elemento dummy.
+            orders = np.zeros(1, dtype=np.uint32)
+        tbo_buf = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_TEXTURE_BUFFER, tbo_buf)
+        GL.glBufferData(GL.GL_TEXTURE_BUFFER, orders.nbytes, orders, GL.GL_DYNAMIC_DRAW)
+        tex_id = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_BUFFER, tex_id)
+        GL.glTexBuffer(GL.GL_TEXTURE_BUFFER, GL.GL_R32UI, tbo_buf)
+        GL.glBindTexture(GL.GL_TEXTURE_BUFFER, 0)
+        GL.glBindBuffer(GL.GL_TEXTURE_BUFFER, 0)
+        return tbo_buf, tex_id
+
+    def _update_gl_bond_order_texture_buffer(self, tbo_buf, orders):
+        """ Reenvia o conteudo de uma Buffer Texture ja existente (criada por
+            _make_gl_bond_order_texture_buffer), sem recriar buffer/textura.
+            Usado quando bond_order_list muda mas o numero de ligacoes e
+            compativel com o buffer atual (ex.: recarregar a mesma molecula).
+            Se o TAMANHO em bytes mudar, o chamador deve recriar do zero
+            (ver _refresh_bond_order_tbo em SticksRepresentation). """
+        orders = np.ascontiguousarray(orders, dtype=np.uint32)
+        if orders.size == 0:
+            orders = np.zeros(1, dtype=np.uint32)
+        GL.glBindBuffer(GL.GL_TEXTURE_BUFFER, tbo_buf)
+        GL.glBufferData(GL.GL_TEXTURE_BUFFER, orders.nbytes, orders, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_TEXTURE_BUFFER, 0)
+
     def _make_gl_radius_buffer(self, radii, program, instances=False):
         """ Function doc """
         rad_vbo = GL.glGenBuffers(1)
@@ -730,69 +781,144 @@ class SticksRepresentation(Representation):
         """ Function doc """
         self.radius = radius
 
-    def _compute_bond_order_per_vertex(self, n_atoms):
-        """ Constroi, NA HORA, o array de ordem-de-ligacao por atomo alinhado
-            com o VBO de coordenadas (tamanho n_atoms = atomos do frame).
+    def _get_bond_order_per_bond(self):
+        """ Retorna a ordem de ligacao PAREADA 1:1 com self.vm_object.index_bonds
+            -- ou seja, o k-esimo elemento deste array e a ordem do k-esimo
+            PAR (dois elementos) de index_bonds. Esta e a fonte de verdade
+            usada pela Buffer Texture (u_bond_order_tbo) lida no geometry
+            shader via gl_PrimitiveIDIn (ver shaders/sticks.py).
 
-            Faz isso aqui (no momento de montar o VBO) em vez de depender de
-            vm_object.bond_order_per_atom porque alguns caminhos de criacao do
-            objeto (define_bonds_from_external, carga de sessao do pDynamo,
-            etc.) nunca chamam _build_bond_order_per_atom, ou o constroem com
-            um numero de atomos diferente do frame desenhado. Aqui usamos
-            index_bonds + bond_order_list (que ja existem, qualquer que tenha
-            sido o caminho) e dimensionamos pelo frame, eliminando a
-            divergencia de tamanho que descartava o array.
-
-            Regra: cada atomo recebe a MAIOR ordem entre as ligacoes em que
-            aparece; indices fora do range do frame sao ignorados. Default 1.
+            [ATUALIZACAO] Substitui _compute_bond_order_per_vertex, que
+            expandia isso para um array POR ATOMO tomando a MAIOR ordem entre
+            as ligacoes de cada atomo -- correto apenas quando um atomo nao
+            participa de ligacoes com ordens diferentes entre si. Agora nao
+            ha essa perda de informacao: a ordem certa vai para a ligacao
+            certa, nao para o atomo.
         """
-        orders = np.ones(n_atoms, dtype=np.int32)
+        # [NOVO] Dynamic Bonds (regiao QC, is_dynamic=True): a conectividade
+        # muda A CADA FRAME (self.vm_object.dynamic_bonds[f]), entao a ordem
+        # tambem precisa ser recalculada por frame -- o dict estatico
+        # self.vm_object.bonds (usado no branch abaixo) reflete so' a
+        # conectividade INICIAL da molecula inteira e nao tem esses pares.
+        # get_dynamic_bond_order_for_frame ja' cacheia por frame (so'
+        # recalcula quando muda), entao chamar isso a cada draw e' barato.
+        if self.is_dynamic:
+            frame, f = self.vm_glcore._safe_frame_coords(self.vm_object)
+            get_dyn = getattr(self.vm_object, "get_dynamic_bond_order_for_frame", None)
+            dyn_pairs = getattr(self.vm_object, "dynamic_bonds", None)
+            if get_dyn is not None and dyn_pairs is not None and 0 <= f < len(dyn_pairs):
+                n_bonds_dyn = int(np.asarray(dyn_pairs[f]).ravel().shape[0] // 2)
+                try:
+                    mb_on = self.vm_session.vm_config.gl_parameters.get("multiple_bonds", True)
+                except Exception:
+                    mb_on = True
+                if not mb_on:
+                    return np.ones(max(n_bonds_dyn, 1), dtype=np.uint32)
+                orders_dyn = get_dyn(f)
+                if orders_dyn.shape[0] == n_bonds_dyn and n_bonds_dyn > 0:
+                    return orders_dyn.astype(np.uint32)
+                return np.ones(max(n_bonds_dyn, 1), dtype=np.uint32)
+            # Sem dynamic_bonds populado ainda para este frame: cai no
+            # comportamento antigo abaixo (estatico) como fallback seguro.
+        # [BUG FIX / ROBUSTEZ] Antes, esta funcao pareava bond_order_list
+        # com self.vm_object.index_bonds POR POSICAO. Isso quebra se
+        # self.indexes (a copia usada de fato no GL_ELEMENT_ARRAY_BUFFER,
+        # ver Representation.__init__ / define_new_indexes_to_vbo) ficar
+        # fora de sincronia com self.vm_object.index_bonds -- por exemplo,
+        # quando os bonds sao recalculados (nova percepcao de ordem) DEPOIS
+        # que esta representacao ja foi criada, e ninguem chama
+        # define_new_indexes_to_vbo(...) + was_rep_ind_modified=True para
+        # atualizar o buffer da GPU. Nesse caso, self.indexes (o que a GPU
+        # de fato desenha) e self.vm_object.index_bonds (usado aqui antes)
+        # podem ter tamanhos/ordens diferentes, e o pareamento posicional
+        # aplica a ordem ERRADA a ligacao ERRADA (o sintoma visto: um trecho
+        # inteiro da cadeia parecendo "ligacao tripla", quando so' uma
+        # ligacao no meio deveria ser).
+        #
+        # Agora buscamos a ordem PELO PAR DE ATOMOS (i,j), direto no dict
+        # self.vm_object.bonds (fonte de verdade, chave = par normalizado),
+        # usando os MESMOS pares que estao em self.indexes -- exatamente o
+        # array que a GPU desenha. Isso e robusto a qualquer descompasso de
+        # tamanho/ordem entre self.indexes e vm_object.index_bonds; o pior
+        # caso e um par nao encontrado no dict, que cai em ordem 1 (simples).
+        ib = np.asarray(self.indexes).ravel()
+        n_bonds = int(ib.shape[0] // 2)
+        if n_bonds == 0:
+            return np.ones(1, dtype=np.uint32)
         # Flag global: se multiple_bonds estiver desligada, todas as ligacoes
         # sao desenhadas como simples (array fica todo 1). Default True se a
         # chave nao existir no config.
         try:
-            _mb = self.vm_session.vm_config.gl_parameters.get("multiple_bonds", "AUSENTE")
-            dprint("[multiple_bonds DEBUG] valor lido =", _mb)
             if not self.vm_session.vm_config.gl_parameters.get("multiple_bonds", True):
-                return orders
+                return np.ones(n_bonds, dtype=np.uint32)
         except Exception as _e:
             dprint("[multiple_bonds DEBUG] error reading flag:", _e)
-        ib = getattr(self.vm_object, "index_bonds", None)
-        bol = getattr(self.vm_object, "bond_order_list", None)
-        if ib is None or bol is None:
+        get_bond = getattr(self.vm_object, "get_bond", None)
+        orders = np.ones(n_bonds, dtype=np.uint32)
+        if get_bond is None:
             return orders
-        ib = np.asarray(ib).ravel()
-        bol = np.asarray(bol).ravel()
-        for k in range(len(bol)):
+        n_not_found = 0
+        for k in range(n_bonds):
             i = int(ib[2 * k]); j = int(ib[2 * k + 1])
-            o = int(bol[k])
-            if 0 <= i < n_atoms and o > orders[i]:
-                orders[i] = o
-            if 0 <= j < n_atoms and o > orders[j]:
-                orders[j] = o
+            bond = get_bond(i, j)
+            if bond is not None:
+                orders[k] = int(bond.bond_order)
+            else:
+                n_not_found += 1
+        # [DEBUG TEMPORARIO] print incondicional (nao usa dprint -- dprint so'
+        # mostra algo com EASYHYBRID_DEBUG=1) para diagnosticar se os dados
+        # chegam corretos ate aqui (lado Python) ou se o problema e' no
+        # shader/GPU. Remova depois de confirmar.
+        
+        '''
+        print("[DIAG _get_bond_order_per_bond] rep=%r n_bonds=%d nao_encontrados=%d orders=%s"
+              % (getattr(self, "name", "?"), n_bonds, n_not_found, orders.tolist()))
+        '''
+        
         return orders
 
     def _make_gl_representation_vao_and_vbos(self):
-        """ Same as base, plus a per-atom bond-order VBO feeding the shader
-            attribute 'vert_bond_order' (used to draw double/triple bonds). """
+        """ Same as base, plus a per-BOND (per-primitive) bond-order Buffer
+            Texture feeding the geometry shader uniform 'u_bond_order_tbo'
+            (used to draw double/triple bonds). Lida via gl_PrimitiveIDIn,
+            entao nao depende do esquema de atributo por-vertice/por-atomo
+            (ver _get_bond_order_per_bond acima e sticks.py). """
         super(SticksRepresentation, self)._make_gl_representation_vao_and_vbos()
-        # frames[0] tem forma (N_atomos, 3), entao o numero de atomos e shape[0].
-        n_atoms = self.vm_object.frames[0].shape[0]
-        orders = self._compute_bond_order_per_vertex(n_atoms)
-        GL.glBindVertexArray(self.vao)
-        self.bond_order_vbo = self._make_gl_bond_order_buffer(orders, self.shader_program)
-        GL.glBindVertexArray(0)
+        orders = self._get_bond_order_per_bond()
+        self.bond_order_tbo_buf, self.bond_order_tex = self._make_gl_bond_order_texture_buffer(orders)
+        self._bond_order_tbo_size = orders.shape[0]
 
-    def _make_gl_sel_representation_vao_and_vbos(self):
-        """ Same as base, plus the per-atom bond-order VBO so the selection
-            geometry shader (which shares VS/GS with the draw program) also has
-            the 'vert_bond_order' attribute fed. """
-        super(SticksRepresentation, self)._make_gl_sel_representation_vao_and_vbos()
-        n_atoms = self.vm_object.frames[0].shape[0]
-        orders = self._compute_bond_order_per_vertex(n_atoms)
-        GL.glBindVertexArray(self.sel_vao)
-        self.sel_bond_order_vbo = self._make_gl_bond_order_buffer(orders, self.sel_shader_program)
-        GL.glBindVertexArray(0)
+    def _refresh_bond_order_tbo(self):
+        """ Reenvia bond_order_list para a Buffer Texture. Chamado sempre que
+            os indices (index_bonds) sao recarregados (ex.: Dynamic Bonds
+            trocando de frame, ou uma nova selecao de atomos), ja que o
+            numero/ordem das ligacoes pode ter mudado. Recria a textura do
+            zero se o tamanho mudou (uma Buffer Texture nao pode so' 'crescer'
+            sem realocar). """
+        orders = self._get_bond_order_per_bond()
+        if getattr(self, "bond_order_tbo_buf", None) is None:
+            self.bond_order_tbo_buf, self.bond_order_tex = self._make_gl_bond_order_texture_buffer(orders)
+            self._bond_order_tbo_size = orders.shape[0]
+            return
+        if orders.shape[0] != getattr(self, "_bond_order_tbo_size", -1):
+            # Tamanho mudou: recria buffer+textura (mais simples e seguro do
+            # que tentar redimensionar uma Buffer Texture existente).
+            GL.glDeleteTextures([self.bond_order_tex])
+            GL.glDeleteBuffers(1, [self.bond_order_tbo_buf])
+            self.bond_order_tbo_buf, self.bond_order_tex = self._make_gl_bond_order_texture_buffer(orders)
+            self._bond_order_tbo_size = orders.shape[0]
+        else:
+            self._update_gl_bond_order_texture_buffer(self.bond_order_tbo_buf, orders)
+
+    # [ATUALIZACAO] O override de _make_gl_sel_representation_vao_and_vbos foi
+    # removido: o picking/selecao nao precisa mais de nenhum buffer de ordem
+    # de ligacao. A ordem agora e lida no geometry shader via
+    # u_bond_order_tbo (Buffer Texture) + gl_PrimitiveIDIn; o programa de
+    # selecao (sticks_sel) usa o MESMO geometry shader mas nunca vincula essa
+    # textura, entao texelFetch retorna 0 -> clamp para ordem 1 (ligacao
+    # simples) -> raio cheio, sem offset. Isso e exatamente o comportamento
+    # ja documentado em draw_background_sel_representation ("Independe de
+    # bond_order"), entao a classe base (sem bond-order) ja e suficiente.
 
     def _load_camera_pos(self, program):
         xyz_coords = self.vm_glcore.glcamera.get_modelview_position(self.vm_object.model_mat)
@@ -827,6 +953,15 @@ class SticksRepresentation(Representation):
             self._load_color_vbo(None)
             self.was_col_modified = False
         
+        # Reenvia bond_order_list para a Buffer Texture sempre que desenha.
+        # Cobre tanto o caso estatico (ordem mudou por edicao manual/Builder,
+        # sem necessariamente marcar was_rep_ind_modified) quanto o dinamico
+        # (Dynamic Bonds recalcula index_bonds/bond_order_list a cada frame
+        # de trajetoria). Custo e uma unica glBufferData pequena (uma
+        # ligacao = 4 bytes); _refresh_bond_order_tbo so recria buffer/textura
+        # do zero se o NUMERO de ligacoes mudou, senao so' atualiza o conteudo.
+        self._refresh_bond_order_tbo()
+        
         # Ligacoes multiplas: 3 passadas. A passada 0 desenha o cilindro
         # central/primeiro de TODAS as ligacoes; as passadas 1 e 2 desenham os
         # cilindros laterais apenas onde a ordem (>=2, >=3) exige -- o geometry
@@ -839,12 +974,45 @@ class SticksRepresentation(Representation):
             # Separacao entre cilindros de uma ligacao multipla. Reduzida para
             # acompanhar os tubos mais finos (eff_rad*0.6 no shader). Aumente
             # para afastar, diminua para aproximar.
-            GL.glUniform1f(u_sep_loc, float(self.radius) * 1.8)
+            GL.glUniform1f(u_sep_loc, float(self.radius) * 1.0)
         
+        # Vincula a Buffer Texture de ordem de ligacao numa unidade de textura
+        # dedicada (GL_TEXTURE1, para nao colidir com a unidade 0 usada pelas
+        # fontes/labels em outro lugar do codigo) e aponta o sampler do
+        # geometry shader (u_bond_order_tbo) pra essa unidade.
+        u_bond_tbo_loc = self.vm_glcore._get_uniform_location(self.shader_program, "u_bond_order_tbo")
+        
+        '''
+        # [DIAG TEMPORARIO]
+        if not getattr(self, "_diag_uniform_printed", False):
+            print("[DIAG uniforms] rep=%r u_pass_loc=%d u_sep_loc=%d u_bond_tbo_loc=%d bond_order_tex=%r"
+                  % (getattr(self, "name", "?"), u_pass_loc, u_sep_loc, u_bond_tbo_loc,
+                     getattr(self, "bond_order_tex", None)))
+            self._diag_uniform_printed = True
+        '''
+        
+        if u_bond_tbo_loc != -1 and getattr(self, "bond_order_tex", None) is not None:
+            GL.glActiveTexture(GL.GL_TEXTURE1)
+            GL.glBindTexture(GL.GL_TEXTURE_BUFFER, self.bond_order_tex)
+            GL.glUniform1i(u_bond_tbo_loc, 1)
+        
+        # [BUG FIX] Antes usava len(self.vm_object.index_bonds), que e o
+        # array a nivel de OBJETO (pode ter sido recalculado -- ex.: nova
+        # percepcao de ordem de ligacao -- com um NUMERO DIFERENTE de
+        # ligacoes). O que realmente esta no GL_ELEMENT_ARRAY_BUFFER (e,
+        # portanto, o que gl_PrimitiveIDIn de fato percorre) e self.indexes
+        # (uma COPIA feita em __init__ / define_new_indexes_to_vbo). Se
+        # os dois tamanhos divergirem, pedir mais elementos do que existem
+        # no buffer faz o driver ler dados obsoletos/fora dos limites --
+        # exatamente o tipo de desalinhamento que faz uma ligacao simples
+        # aparecer com o offset/ordem de outra. Ver tambem
+        # _get_bond_order_per_bond, que agora usa a MESMA fonte (self.indexes)
+        # para montar a Buffer Texture, garantindo que os dois fiquem sempre
+        # alinhados um com o outro.
         if self.is_dynamic:
-            n_elem = int(len(self.vm_object.index_bonds) + 4)
+            n_elem = int(len(self.indexes) + 4)
         else:
-            n_elem = int(len(self.vm_object.index_bonds))
+            n_elem = int(len(self.indexes))
         
         for _pass in range(3):
             if u_pass_loc != -1:
@@ -852,6 +1020,14 @@ class SticksRepresentation(Representation):
             GL.glDrawElements(GL.GL_LINES, n_elem, GL.GL_UNSIGNED_INT, None)
             if u_pass_loc == -1:
                 break  # shader sem suporte a passadas: desenha so uma vez
+        
+        # Desvincula a Buffer Texture e volta pra unidade 0 (default usado em
+        # outros pontos do codigo, ex.: fontes/labels) para nao deixar estado
+        # de textura "vazando" para o proximo draw call de outra representacao.
+        if u_bond_tbo_loc != -1 and getattr(self, "bond_order_tex", None) is not None:
+            GL.glActiveTexture(GL.GL_TEXTURE1)
+            GL.glBindTexture(GL.GL_TEXTURE_BUFFER, 0)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
         
         GL.glBindVertexArray(0)
         self._disable_anti_alias_to_lines()

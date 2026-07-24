@@ -49,7 +49,13 @@ from vismol.libgl.representations import CartoonRepresentation
 import vismol.utils.c_distances as cdist
 
 logger = getLogger(__name__)
-
+GABEDIT_MAX_VALENCE = {
+    'H' : 1, 'HE': 0,
+    'LI': 1, 'BE': 2, 'B' : 3, 'C' : 4, 'N' : 3, 'O' : 2, 'F' : 1, 'NE': 0,
+    'NA': 1, 'MG': 2, 'AL': 3, 'SI': 4, 'P' : 3, 'S' : 2, 'CL': 1, 'AR': 0,
+    'K' : 1, 'CA': 2, 'BR': 1, 'I' : 1,
+    'FE': 2, 'ZN': 2, 'CU': 2, 'MN': 2, 'NI': 2, 'CO': 2,
+}
 
 class VismolObject:
     """ Visual Object contains the information necessary for openGL to draw 
@@ -129,6 +135,13 @@ class VismolObject:
         
         self.bond_order_list = None  # A bond order list [1,1,1,2,1,1, and so on...]        
         self.bond_order_per_atom = None # Ordem de ligacao por atomo (VBO vert_bond_order)
+        '''
+        self.index_bonds is a flattened list of atom pairs: [i0, j0, i1, j1, i2, j2, ...] — two elements per bond (atom i, atom j).
+        self.bond_order_list contains one bond order value per bond: [order0, order1, order2, ...].
+        '''
+        
+        
+        
         # Ligacoes de coordenacao metalica (>=1 metal) e covalentes (sem metal).
         # Arrays achatados [i0,j0, i1,j1, ...]. metal_bonds e desenhado como
         # linha pontilhada; covalent_bonds alimenta sticks/lines. As metalicas
@@ -171,6 +184,12 @@ class VismolObject:
         self.picking_dot_buffers = None
         
         self.dynamic_bonds  = [] # Pair of atoms, something like: [[0,1,1,2,3,4] , [0,1,1,2], ...]
+        # Cache de ordem de ligacao POR FRAME, paralelo a self.dynamic_bonds
+        # (self.dynamic_bond_orders[f] e' um array numpy com uma ordem por
+        # par de self.dynamic_bonds[f], na mesma ordem). None = ainda nao
+        # calculado para aquele frame. Ver get_dynamic_bond_order_for_frame
+        # e perceive_bond_order_for_pairs.
+        self.dynamic_bond_orders = []
                                 # Like self.index_bonds but for each frame
         
         self.c_alpha_bonds = [] # List of pair of atoms defining dynamic bonds for each frame
@@ -871,6 +890,89 @@ class VismolObject:
         key = (index_i, index_j) if index_i <= index_j else (index_j, index_i)
         return self.bonds.get(key)
 
+    def perceive_bond_order_for_pairs(self, flat_pairs):
+        """
+        Heuristica de valencia (GABEDIT_MAX_VALENCE), igual a usada em
+        _bonds_from_pair_of_indexes_list, mas como funcao PURA: dado um
+        array achatado de pares de atomos [i0,j0,i1,j1,...], devolve um
+        array numpy (uint32) com uma ordem de ligacao por par, na MESMA
+        ordem dos pares recebidos.
+
+        Diferenca-chave em relacao ao codigo original: o grau de cada atomo
+        usado no teste de valencia e' calculado LOCALMENTE a partir apenas
+        dos pares recebidos (dict 'degree' abaixo) -- NAO mexe em
+        self.atoms[i].nbonds nem em nenhum outro estado persistente do
+        objeto. Isso permite chamar esta funcao repetidamente com listas de
+        pares DIFERENTES (ex.: a conectividade de cada frame das Dynamic
+        Bonds, que pode mudar a cada passo da trajetoria) sem que uma
+        chamada "contamine" a proxima com graus inflados de uma chamada
+        anterior.
+
+        Mesma regra de duas passadas de _bonds_from_pair_of_indexes_list
+        (dupla primeiro, tripla so' promove quem ja e' dupla).
+        """
+        ib = np.asarray(flat_pairs).ravel()
+        n_bonds = int(ib.shape[0] // 2)
+        if n_bonds == 0:
+            return np.ones(0, dtype=np.uint32)
+
+        # Grau local: quantos parceiros cada atomo tem DENTRO DESTE conjunto
+        # de pares -- nao o grau da molecula inteira (self.atoms[i].nbonds).
+        degree = {}
+        for k in range(n_bonds):
+            i = int(ib[2 * k]); j = int(ib[2 * k + 1])
+            degree[i] = degree.get(i, 0) + 1
+            degree[j] = degree.get(j, 0) + 1
+
+        order = np.ones(n_bonds, dtype=np.uint32)
+
+        # duplas
+        for k in range(n_bonds):
+            i = int(ib[2 * k]); j = int(ib[2 * k + 1])
+            max_i = GABEDIT_MAX_VALENCE.get(self.atoms[i].symbol, 4)
+            max_j = GABEDIT_MAX_VALENCE.get(self.atoms[j].symbol, 4)
+            if degree[i] < max_i and degree[j] < max_j:
+                order[k] = 2
+                degree[i] += 1
+                degree[j] += 1
+
+        # triplas -- so' promove quem ja e' dupla (bug fix ja aplicado aqui)
+        for k in range(n_bonds):
+            if order[k] != 2:
+                continue
+            i = int(ib[2 * k]); j = int(ib[2 * k + 1])
+            max_i = GABEDIT_MAX_VALENCE.get(self.atoms[i].symbol, 4)
+            max_j = GABEDIT_MAX_VALENCE.get(self.atoms[j].symbol, 4)
+            if degree[i] < max_i and degree[j] < max_j:
+                order[k] = 3
+                degree[i] += 1
+                degree[j] += 1
+
+        return order
+
+    def get_dynamic_bond_order_for_frame(self, f):
+        """
+        Retorna a ordem de ligacao para o frame 'f' das Dynamic Bonds,
+        pareada 1:1 com self.dynamic_bonds[f] (mesma ordem de pares).
+        Calcula sob demanda e cacheia em self.dynamic_bond_orders[f]; um
+        novo calculo so' acontece se o cache ainda nao existir para aquele
+        frame OU se o numero de pares mudou (ex.: a conectividade daquele
+        frame foi recalculada por distancia, o que pode acontecer se o
+        usuario reprocessar a trajetoria).
+        """
+        if self.dynamic_bonds is None or f < 0 or f >= len(self.dynamic_bonds):
+            return np.ones(0, dtype=np.uint32)
+        while len(self.dynamic_bond_orders) <= f:
+            self.dynamic_bond_orders.append(None)
+        pairs = self.dynamic_bonds[f]
+        n_bonds = int(np.asarray(pairs).ravel().shape[0] // 2)
+        cached = self.dynamic_bond_orders[f]
+        if cached is not None and cached.shape[0] == n_bonds:
+            return cached
+        order = self.perceive_bond_order_for_pairs(pairs)
+        self.dynamic_bond_orders[f] = order
+        return order
+
     def _bonds_from_pair_of_indexes_list(self, exclude_list=[['H', 'H']],
                                          external_orders=None):
         """
@@ -920,11 +1022,13 @@ class VismolObject:
         # Percorre self.index_bonds de 2 em 2 (cada par = um bond)
         n = 0
         
+        
+        #''' este loop é para montar o self.bonds dict com a ligaçãoes'''
         for i in range(0, len(self.index_bonds) - 1, 2):
-
             index_i = self.index_bonds[i]      # índice do primeiro átomo
             index_j = self.index_bonds[i + 1]  # índice do segundo átomo
 
+            
             # Verifica se o par está na lista de exclusão (ex.: H–H)
             is_excluded = False
             for excluded_bond in exclude_list:
@@ -945,57 +1049,78 @@ class VismolObject:
                 bond = Bond(atom_i=self.atoms[index_i], atom_index_i=index_i,
                             atom_j=self.atoms[index_j], atom_index_j=index_j)
 
-                # Define a ordem de ligação:
-                #  - se veio ordem externa, usa a posição bond_pair_idx
-                #    (Convenção B: lista já filtrada, então o k-ésimo
-                #     sobrevivente casa com external_orders[k]);
-                #  - senão, cai no palpite geométrico (UFF).
-                #
-                # [EN] BUG FIX: this branch used to be a no-op ("pass",
-                # with the actual assignment commented out) -- passing
-                # external_orders had ZERO effect, bond.bond_order always
-                # stayed at Bond.__init__'s default (1), regardless of
-                # what was passed in. Also used `n` (never incremented,
-                # always 0) instead of bond_pair_idx (the correct,
-                # already-filtered counter -- see the comment above:
-                # "Convencao B", the index into external_orders that's
-                # actually aligned with non-excluded bonds). Found while
-                # wiring up the Builder's bond-order-cycling feature
-                # (click_mode.py), which relies on this actually working
-                # to persist a manually-set order across rebuilds.
-                if external_orders is not None:
-                    bond.bond_order = int(external_orders[bond_pair_idx])
-                else:
-                    #print('standard bond.get_bond_order')
-                    bond.get_bond_order()
+                bond.bond_order = 1
 
-                self.bond_order_list.append(bond.bond_order)
+                #self.bond_order_list.append(bond.bond_order)
 
                 # Avança o contador só agora, após criar um bond válido.
-                bond_pair_idx += 1
+                #bond_pair_idx += 1
 
                 # Registra o bond no dict, chave = par de indices normalizado
                 # (menor, maior), para busca independente da ordem dos atomos.
                 bkey = (index_i, index_j) if index_i <= index_j else (index_j, index_i)
-                self.bonds[bkey] = bond
-
-                # Atualiza cada átomo com o bond do qual participa
-                self.atoms[index_i].bonds.append(bond)
-                self.atoms[index_j].bonds.append(bond)
-            #n= n+2
-        # Converte para arrays numpy (uint32) usados pelos VBOs
-        self.index_bonds = new_index_bonds
+                
+                if bkey in self.bonds.keys():
+                    pass
+                else:
+                    self.bonds[bkey] = bond
+                    self.atoms[index_i].bonds.append(bond)
+                    self.atoms[index_j].bonds.append(bond)
+        
+        
+        #atribuindo aos átomos o numero de parceiros
+        for atom in self.atoms.values ( ):
+            atom.nbonds = len(atom.bonds)
+            #print(atom.nbonds)
+        
+    
+        #print(new_index_bonds)
+        self._index_bonds_from_bonds_dict()
+        
+        #print(self.index_bonds)
         self.index_bonds = np.array(self.index_bonds, dtype=np.uint32)
+       
+        #print(self.bond_order_list)
+        #print(self.bonds.keys())
         
         
-        self.bond_order_list = np.array(self.bond_order_list, dtype=np.uint32)
+        
+        
+        
+        #- - - - - - - - - percepcao de ordem (dupla/tripla) - - - - - - - -
+        # Reusa a mesma heuristica de valencia usada pelas Dynamic Bonds
+        # (ver perceive_bond_order_for_pairs), agora como funcao pura: nao
+        # muta mais self.atoms[i].nbonds como efeito colateral (antes os
+        # dois loops separados incrementavam isso durante o calculo, o que
+        # inflava .nbonds alem do numero real de vizinhos do atomo).
+        
+        computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
+        self.bond_order_list = computed_orders.tolist()
+        
+        #print(len(self.bond_order_list))
+        #print(self.bond_order_list)
+        
+        # Sincroniza bond_order_list de volta para os objetos Bond em
+        # self.bonds (representations.py le' bond.bond_order direto do
+        # objeto via self.get_bond(i,j), nao posicionalmente da lista).
+        # Mesma ordem de iteracao usada em _index_bonds_from_bonds_dict
+        # (dict nao foi mutado desde entao, entao a correspondencia por
+        # posicao continua valida).
+        
+        for k, bond in enumerate(self.bonds.values()):
+            bond.bond_order = int(self.bond_order_list[k])
+        
+        
         #self.bond_order_list = np.array(external_orders, dtype=np.uint32)
-        # Percepcao robusta quando nao ha ordens externas (ver metodo principal).
-        if external_orders is None:
-            self._perceive_bond_orders()
+        # [DEBUG/TESTE] Percepcao robusta DESATIVADA -- todas as ligacoes ja
+        # saem forcadas como order=2 no loop acima, entao nao faz sentido
+        # (e poderia sobrescrever) rodar a percepcao geometrica aqui.
+        # if external_orders is None:
+        #     self._perceive_bond_orders()
         # Constroi o array de ordem-de-ligacao por atomo (alinhado com as
         # coordenadas) usado pelo VBO 'vert_bond_order' nos sticks/lines.
-        self._build_bond_order_per_atom()
+        
+        #self._build_bond_order_per_atom()
         
         
         
@@ -1009,10 +1134,28 @@ class VismolObject:
         
         # Propaga a ordem (por aresta) para um array por átomo, alinhado
         # com as coordenadas — é esse array que alimenta o VBO do shader.
-        self._build_bond_order_per_atom()
+        #self._build_bond_order_per_atom()
 
-
-
+    def _index_bonds_from_bonds_dict (self):
+        """ 
+        Esta função  gera  as listas  self.index_bonds e a self.bonds a 
+        partir do dicionário self.bonds. Ela garante que não há ligações 
+        duplicadas no self.index_bonds
+        
+        
+        self.index_bonds = [i0, j0, i1, j1, ...] — two elements per bond (atom i, atom j).
+        self.bond_order_list = [order0, order1, ...]. - all int s 
+        
+        self.bonds = {(i0,j0):Bond, (i1,j1):Bond,, (i2,j2):Bond, } / Bond is a bond object
+        
+        """
+        self.index_bonds = [x for par in self.bonds.keys() for x in par]
+        self.bond_order_list = []
+        for bond in self.bonds.values():
+            self.bond_order_list.append(bond.bond_order)
+        #self.bond_order_list(list(self.bonds.values()))
+    
+    
     def _get_non_bonded_from_bonded_list(self):
         """ Function doc """
         assert self.non_bonded_atoms is None

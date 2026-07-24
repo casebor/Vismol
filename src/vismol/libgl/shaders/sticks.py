@@ -73,21 +73,27 @@ in vec3 vert_coord;
 in vec3 vert_color;
 //const float vert_rad = 0.10;
 uniform float vert_rad; // float uniform
-// Ordem da ligacao por atomo (1 = simples, 2 = dupla, 3 = tripla). Vem do
-// VBO 'vert_bond_order' alimentado por SticksRepresentation. Inteiro para
-// evitar erros de comparacao com float. Default 1 se o atributo nao existir.
-in int vert_bond_order;
+// [ATUALIZACAO] A ordem da ligacao NAO vem mais como atributo por-vertice
+// (vert_bond_order foi removido). O problema do atributo por-vertice: ele e
+// indexado por ATOMO (via GL_ELEMENT_ARRAY_BUFFER = index_bonds), entao um
+// atomo com duas ligacoes de ordens diferentes so podia guardar UM valor
+// (por isso a solucao antiga usava a MAIOR ordem entre as ligacoes do atomo
+// -- efetivamente "valencia maxima", nao a ordem real de cada ligacao).
+//
+// Agora a ordem e lida diretamente no GEOMETRY SHADER via uma Buffer Texture
+// (u_bond_order_tbo) + gl_PrimitiveIDIn, que da o indice da ligacao (0-based,
+// mesma ordem de self.index_bonds) sendo desenhada em cada invocacao do GS.
+// Isso pareia bond_order_list[k] com o k-esimo PAR de self.index_bonds de
+// forma exata, sem nenhuma ambiguidade por atomo compartilhado. Ver
+// geometry_shader_sticks abaixo e representations.py (SticksRepresentation).
 
 out vec3 geom_color;
 out vec4 geom_coord;
 out float geom_rad;
-flat out int geom_bond_order;
 
 void main(){
     geom_color = vert_color;
     geom_rad = vert_rad;
-    geom_bond_order = vert_bond_order;
-    //geom_bond_order = 2;
     geom_coord = view_mat * model_mat * vec4(vert_coord, 1.0);
 }
 """
@@ -115,11 +121,21 @@ layout (triangle_strip, max_vertices = 40) out;
 uniform int u_pass;
 uniform float u_separation;
 
+// [ATUALIZACAO] Ordem da ligacao lida por PRIMITIVA (nao mais por vertice).
+// u_bond_order_tbo e uma Buffer Texture (GL_TEXTURE_BUFFER, formato R32UI)
+// com exatamente uma entrada por ligacao, na MESMA ordem em que os pares
+// aparecem em self.index_bonds -- ou seja, texel k == bond_order_list[k].
+// gl_PrimitiveIDIn e o indice (0-based) da primitiva GL_LINES sendo
+// processada nesta invocacao do geometry shader dentro do glDrawElements
+// atual; como cada par de index_bonds vira exatamente uma primitiva
+// GL_LINES, gl_PrimitiveIDIn == k. Isso pareia a ordem 1:1 com cada par de
+// index_bonds, sem qualquer ambiguidade por atomo compartilhado (o problema
+// do esquema antigo, que usava um atributo por-vertice/por-atomo).
+uniform usamplerBuffer u_bond_order_tbo;
 
 in vec3 geom_color[];
 in vec4 geom_coord[];
 in float geom_rad[];
-flat in int geom_bond_order[];
 
 out vec3 frag_coord;
 out vec3 frag_color;
@@ -514,8 +530,13 @@ void emit_cylinder(){
 }
 
 void main(){
-    // Ordem da ligacao (lida do 2o atomo da aresta, como no shader de lines).
-    int order = geom_bond_order[1];
+    // Ordem da ligacao: um texel por ligacao, indexado pela primitiva atual
+    // (gl_PrimitiveIDIn == k-esimo par de self.index_bonds == bond_order_list[k]).
+    // Se a textura nao estiver vinculada (ex.: programa de selecao/picking,
+    // que nao precisa de ordem correta -- desenha so a passada 0 com
+    // u_separation=0), texelFetch retorna 0, que o clamp abaixo trata como
+    // ligacao simples (comportamento seguro default).
+    int order = int(texelFetch(u_bond_order_tbo, gl_PrimitiveIDIn).r);
     if (order < 1) order = 1;
     if (order > 3) order = 3;
 
