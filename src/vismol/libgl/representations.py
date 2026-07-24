@@ -869,12 +869,8 @@ class SticksRepresentation(Representation):
         # mostra algo com EASYHYBRID_DEBUG=1) para diagnosticar se os dados
         # chegam corretos ate aqui (lado Python) ou se o problema e' no
         # shader/GPU. Remova depois de confirmar.
-        
-        '''
         print("[DIAG _get_bond_order_per_bond] rep=%r n_bonds=%d nao_encontrados=%d orders=%s"
               % (getattr(self, "name", "?"), n_bonds, n_not_found, orders.tolist()))
-        '''
-        
         return orders
 
     def _make_gl_representation_vao_and_vbos(self):
@@ -974,23 +970,19 @@ class SticksRepresentation(Representation):
             # Separacao entre cilindros de uma ligacao multipla. Reduzida para
             # acompanhar os tubos mais finos (eff_rad*0.6 no shader). Aumente
             # para afastar, diminua para aproximar.
-            GL.glUniform1f(u_sep_loc, float(self.radius) * 1.0)
+            GL.glUniform1f(u_sep_loc, float(self.radius) * 1.8)
         
         # Vincula a Buffer Texture de ordem de ligacao numa unidade de textura
         # dedicada (GL_TEXTURE1, para nao colidir com a unidade 0 usada pelas
         # fontes/labels em outro lugar do codigo) e aponta o sampler do
         # geometry shader (u_bond_order_tbo) pra essa unidade.
         u_bond_tbo_loc = self.vm_glcore._get_uniform_location(self.shader_program, "u_bond_order_tbo")
-        
-        '''
         # [DIAG TEMPORARIO]
         if not getattr(self, "_diag_uniform_printed", False):
             print("[DIAG uniforms] rep=%r u_pass_loc=%d u_sep_loc=%d u_bond_tbo_loc=%d bond_order_tex=%r"
                   % (getattr(self, "name", "?"), u_pass_loc, u_sep_loc, u_bond_tbo_loc,
                      getattr(self, "bond_order_tex", None)))
             self._diag_uniform_printed = True
-        '''
-        
         if u_bond_tbo_loc != -1 and getattr(self, "bond_order_tex", None) is not None:
             GL.glActiveTexture(GL.GL_TEXTURE1)
             GL.glBindTexture(GL.GL_TEXTURE_BUFFER, self.bond_order_tex)

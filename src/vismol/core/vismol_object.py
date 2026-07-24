@@ -954,23 +954,25 @@ class VismolObject:
         """
         Retorna a ordem de ligacao para o frame 'f' das Dynamic Bonds,
         pareada 1:1 com self.dynamic_bonds[f] (mesma ordem de pares).
-        Calcula sob demanda e cacheia em self.dynamic_bond_orders[f]; um
-        novo calculo so' acontece se o cache ainda nao existir para aquele
-        frame OU se o numero de pares mudou (ex.: a conectividade daquele
-        frame foi recalculada por distancia, o que pode acontecer se o
-        usuario reprocessar a trajetoria).
+        Calcula sob demanda e cacheia em self.dynamic_bond_orders[f]; so'
+        recalcula se o conteudo dos pares mudou (nao so' o tamanho -- em
+        uma regiao QC com ligacoes quebrando/formando, o NUMERO de ligacoes
+        pode ficar igual enquanto os PARES mudam, ex.: A-B quebra e C-D
+        forma ao mesmo tempo; comparar so' o tamanho deixaria passar esse
+        caso e reusaria a ordem errada).
         """
         if self.dynamic_bonds is None or f < 0 or f >= len(self.dynamic_bonds):
             return np.ones(0, dtype=np.uint32)
         while len(self.dynamic_bond_orders) <= f:
             self.dynamic_bond_orders.append(None)
-        pairs = self.dynamic_bonds[f]
-        n_bonds = int(np.asarray(pairs).ravel().shape[0] // 2)
-        cached = self.dynamic_bond_orders[f]
-        if cached is not None and cached.shape[0] == n_bonds:
-            return cached
+        pairs = np.asarray(self.dynamic_bonds[f]).ravel()
+        cached = self.dynamic_bond_orders[f]  # None ou (pairs_snapshot, order)
+        if cached is not None:
+            cached_pairs, cached_order = cached
+            if cached_pairs.shape == pairs.shape and np.array_equal(cached_pairs, pairs):
+                return cached_order
         order = self.perceive_bond_order_for_pairs(pairs)
-        self.dynamic_bond_orders[f] = order
+        self.dynamic_bond_orders[f] = (pairs.copy(), order)
         return order
 
     def _bonds_from_pair_of_indexes_list(self, exclude_list=[['H', 'H']],
@@ -1074,14 +1076,14 @@ class VismolObject:
             #print(atom.nbonds)
         
     
-        #print(new_index_bonds)
+        print(new_index_bonds)
         self._index_bonds_from_bonds_dict()
         
         #print(self.index_bonds)
         self.index_bonds = np.array(self.index_bonds, dtype=np.uint32)
        
-        #print(self.bond_order_list)
-        #print(self.bonds.keys())
+        print(self.bond_order_list)
+        print(self.bonds.keys())
         
         
         
@@ -1093,12 +1095,10 @@ class VismolObject:
         # muta mais self.atoms[i].nbonds como efeito colateral (antes os
         # dois loops separados incrementavam isso durante o calculo, o que
         # inflava .nbonds alem do numero real de vizinhos do atomo).
-        
         computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
         self.bond_order_list = computed_orders.tolist()
-        
-        #print(len(self.bond_order_list))
-        #print(self.bond_order_list)
+        print(len(self.bond_order_list))
+        print(self.bond_order_list)
         
         # Sincroniza bond_order_list de volta para os objetos Bond em
         # self.bonds (representations.py le' bond.bond_order direto do
@@ -1106,7 +1106,6 @@ class VismolObject:
         # Mesma ordem de iteracao usada em _index_bonds_from_bonds_dict
         # (dict nao foi mutado desde entao, entao a correspondencia por
         # posicao continua valida).
-        
         for k, bond in enumerate(self.bonds.values()):
             bond.bond_order = int(self.bond_order_list[k])
         
