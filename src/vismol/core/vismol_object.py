@@ -1095,10 +1095,13 @@ class VismolObject:
         # muta mais self.atoms[i].nbonds como efeito colateral (antes os
         # dois loops separados incrementavam isso durante o calculo, o que
         # inflava .nbonds alem do numero real de vizinhos do atomo).
+        
+        
         computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
         self.bond_order_list = computed_orders.tolist()
         #print(len(self.bond_order_list))
         #print(self.bond_order_list)
+        
         
         # Sincroniza bond_order_list de volta para os objetos Bond em
         # self.bonds (representations.py le' bond.bond_order direto do
@@ -1106,6 +1109,7 @@ class VismolObject:
         # Mesma ordem de iteracao usada em _index_bonds_from_bonds_dict
         # (dict nao foi mutado desde entao, entao a correspondencia por
         # posicao continua valida).
+        
         for k, bond in enumerate(self.bonds.values()):
             bond.bond_order = int(self.bond_order_list[k])
         
