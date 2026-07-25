@@ -200,6 +200,16 @@ class VismolObject:
         # calculado para aquele frame. Ver get_dynamic_bond_order_for_frame
         # e perceive_bond_order_for_pairs.
         self.dynamic_bond_orders = []
+        # [NOVO] Overrides manuais de ordem de ligacao para Dynamic Bonds,
+        # POR FRAME -- dict {frame_idx: {(i,j): ordem, ...}, ...}. Usado
+        # pelo comando de terminal 'bond ... frame=...' (ver atom_ops.
+        # set_dynamic_bond_order()) para forcar uma ordem especifica num
+        # frame especifico, sem que a percepcao automatica (rodada a cada
+        # frame, ver get_dynamic_bond_order_for_frame abaixo) a sobrescreva.
+        # Esparso de proposito: so' tem entrada para os pares/frames que o
+        # usuario realmente editou -- todo o resto continua vindo da
+        # percepcao automatica normalmente.
+        self.dynamic_manual_bond_orders = {}
                                 # Like self.index_bonds but for each frame
         
         self.c_alpha_bonds = [] # List of pair of atoms defining dynamic bonds for each frame
@@ -1067,6 +1077,17 @@ class VismolObject:
         pode ficar igual enquanto os PARES mudam, ex.: A-B quebra e C-D
         forma ao mesmo tempo; comparar so' o tamanho deixaria passar esse
         caso e reusaria a ordem errada).
+
+        [NOVO] Depois da percepcao automatica, aplica
+        self.dynamic_manual_bond_orders[f] (se houver) por cima -- os
+        pares que o usuario forcou explicitamente (via 'bond ...
+        frame=...', ver atom_ops.set_dynamic_bond_order()) sempre vencem
+        a percepcao automatica para aquele par NAQUELE frame especifico.
+        Os setters (set_dynamic_bond_order/unset_dynamic_bond) sao
+        responsaveis por invalidar self.dynamic_bond_orders[f] (setar
+        para None) sempre que mexerem no override ou nos pares daquele
+        frame, para que este metodo recalcule (aplicando o override de
+        novo) na proxima chamada -- ver essas funcoes em atom_ops.py.
         """
         if self.dynamic_bonds is None or f < 0 or f >= len(self.dynamic_bonds):
             return np.ones(0, dtype=np.uint32)
@@ -1079,6 +1100,17 @@ class VismolObject:
             if cached_pairs.shape == pairs.shape and np.array_equal(cached_pairs, pairs):
                 return cached_order
         order = self.perceive_bond_order_for_pairs(pairs)
+
+        dmb = getattr(self, "dynamic_manual_bond_orders", None)
+        overrides = dmb.get(f) if dmb else None
+        if overrides:
+            n_bonds = int(pairs.shape[0] // 2)
+            for k in range(n_bonds):
+                key = (int(pairs[2 * k]), int(pairs[2 * k + 1]))
+                key = (min(key), max(key))
+                if key in overrides:
+                    order[k] = overrides[key]
+
         self.dynamic_bond_orders[f] = (pairs.copy(), order)
         return order
 
@@ -1158,12 +1190,37 @@ class VismolObject:
                 bond = Bond(atom_i=self.atoms[index_i], atom_index_i=index_i,
                             atom_j=self.atoms[index_j], atom_index_j=index_j)
 
-                bond.bond_order = 1
-
-                #self.bond_order_list.append(bond.bond_order)
+                # [EN] BUG FIX: external_orders was accepted as a parameter
+                # and documented above ("Convenção B" -- external_orders[k]
+                # is the order of the k-th NON-EXCLUDED bond) but was NEVER
+                # ACTUALLY CONSULTED anywhere in this method: every bond
+                # silently got bond.bond_order = 1 here, then got
+                # UNCONDITIONALLY overwritten again a few lines below by
+                # perceive_bond_order_for_pairs() -- regardless of what the
+                # caller passed in external_orders. This silently discarded
+                # every manual bond-order override (Builder's terminal
+                # 'bond order=N' / Ctrl+click cycle_bond_order()): the
+                # command ran with no error, manual_bond_orders was
+                # correctly updated, external_orders was correctly built by
+                # _reapply_manual_bonds() in atom_ops.py -- but by the time
+                # a Bond object actually existed, its order had already been
+                # replaced by whatever the automatic valence heuristic
+                # decided. Fixed by applying external_orders[bond_pair_idx]
+                # HERE, 1:1 with the k-th non-excluded bond exactly as the
+                # docstring already specified, and by only running the
+                # automatic perception below when external_orders is None
+                # (see that block's own updated comment). The caller is
+                # responsible for MERGING automatic perception with any
+                # manual overrides before calling this method with
+                # external_orders -- see _reapply_manual_bonds()'s own
+                # updated comment for how it now does that.
+                if external_orders is not None and bond_pair_idx < len(external_orders):
+                    bond.bond_order = int(external_orders[bond_pair_idx])
+                else:
+                    bond.bond_order = 1  # provisorio -- sobrescrito abaixo se external_orders for None
 
                 # Avança o contador só agora, após criar um bond válido.
-                #bond_pair_idx += 1
+                bond_pair_idx += 1
 
                 # Registra o bond no dict, chave = par de indices normalizado
                 # (menor, maior), para busca independente da ordem dos atomos.
@@ -1202,31 +1259,36 @@ class VismolObject:
         # muta mais self.atoms[i].nbonds como efeito colateral (antes os
         # dois loops separados incrementavam isso durante o calculo, o que
         # inflava .nbonds alem do numero real de vizinhos do atomo).
+        #
+        # [EN] BUG FIX: this used to run UNCONDITIONALLY, overwriting
+        # every bond.bond_order set above from external_orders (see that
+        # loop's own updated comment). Now only runs when external_orders
+        # is None -- i.e. the normal file-loading path (no externally
+        # known/trusted orders), exactly what the docstring already said
+        # was supposed to happen ("Se None, a ordem é estimada..."). When
+        # external_orders IS given, bond.bond_order was already set
+        # correctly per-bond in the loop above -- just read it back into
+        # bond_order_list here for anything that consults that list
+        # separately.
+        if external_orders is None:
+            computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
+            self.bond_order_list = computed_orders.tolist()
+            #print(len(self.bond_order_list))
+            #print(self.bond_order_list)
+
+
+            # Sincroniza bond_order_list de volta para os objetos Bond em
+            # self.bonds (representations.py le' bond.bond_order direto do
+            # objeto via self.get_bond(i,j), nao posicionalmente da lista).
+            # Mesma ordem de iteracao usada em _index_bonds_from_bonds_dict
+            # (dict nao foi mutado desde entao, entao a correspondencia por
+            # posicao continua valida).
+            for k, bond in enumerate(self.bonds.values()):
+                bond.bond_order = int(self.bond_order_list[k])
+        else:
+            self.bond_order_list = [int(bond.bond_order) for bond in self.bonds.values()]
         
         
-        computed_orders = self.perceive_bond_order_for_pairs(self.index_bonds)
-        self.bond_order_list = computed_orders.tolist()
-        #print(len(self.bond_order_list))
-        #print(self.bond_order_list)
-        
-        
-        # Sincroniza bond_order_list de volta para os objetos Bond em
-        # self.bonds (representations.py le' bond.bond_order direto do
-        # objeto via self.get_bond(i,j), nao posicionalmente da lista).
-        # Mesma ordem de iteracao usada em _index_bonds_from_bonds_dict
-        # (dict nao foi mutado desde entao, entao a correspondencia por
-        # posicao continua valida).
-        
-        for k, bond in enumerate(self.bonds.values()):
-            bond.bond_order = int(self.bond_order_list[k])
-        
-        
-        #self.bond_order_list = np.array(external_orders, dtype=np.uint32)
-        # [DEBUG/TESTE] Percepcao robusta DESATIVADA -- todas as ligacoes ja
-        # saem forcadas como order=2 no loop acima, entao nao faz sentido
-        # (e poderia sobrescrever) rodar a percepcao geometrica aqui.
-        # if external_orders is None:
-        #     self._perceive_bond_orders()
         # Constroi o array de ordem-de-ligacao por atomo (alinhado com as
         # coordenadas) usado pelo VBO 'vert_bond_order' nos sticks/lines.
         
