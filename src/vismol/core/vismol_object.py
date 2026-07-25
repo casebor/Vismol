@@ -49,12 +49,22 @@ from vismol.libgl.representations import CartoonRepresentation
 import vismol.utils.c_distances as cdist
 
 logger = getLogger(__name__)
+
+# [EN] BUG FIX: as chaves deste dicionario eram TODAS MAIUSCULAS ('CL', 'NA',
+# 'FE', ...), mas self.atoms[i].symbol usa a notacao quimica padrao ('Cl',
+# 'Na', 'Fe', ...) -- ver Atom._get_symbol() / periodic_table.elements_by_symbol.
+# Resultado: para TODO elemento de duas letras (Cl, Na, Fe, Ca, Mg, Br, Zn,
+# Mn, Ni, Cu, Co, Si, Al, Ar, Ne, Be, Li, He) o .get(symbol, 4) nunca batia
+# e sempre caia no default 4 -- ou seja, a valencia maxima desses elementos
+# era ignorada silenciosamente. Corrigido usando as chaves na mesma notacao
+# de self.atoms[i].symbol (assim nao precisa de .upper()/.lower() espalhado
+# pelo codigo que consome este dicionario).
 GABEDIT_MAX_VALENCE = {
-    'H' : 1, 'HE': 0,
-    'LI': 1, 'BE': 2, 'B' : 3, 'C' : 4, 'N' : 3, 'O' : 2, 'F' : 1, 'NE': 0,
-    'NA': 1, 'MG': 2, 'AL': 3, 'SI': 4, 'P' : 3, 'S' : 2, 'CL': 1, 'AR': 0,
-    'K' : 1, 'CA': 2, 'BR': 1, 'I' : 1,
-    'FE': 2, 'ZN': 2, 'CU': 2, 'MN': 2, 'NI': 2, 'CO': 2,
+    'H' : 1, 'He': 0,
+    'Li': 1, 'Be': 2, 'B' : 3, 'C' : 4, 'N' : 3, 'O' : 2, 'F' : 1, 'Ne': 0,
+    'Na': 1, 'Mg': 2, 'Al': 3, 'Si': 4, 'P' : 3, 'S' : 2, 'Cl': 1, 'Ar': 0,
+    'K' : 1, 'Ca': 2, 'Br': 1, 'I' : 1,
+    'Fe': 2, 'Zn': 2, 'Cu': 2, 'Mn': 2, 'Ni': 2, 'Co': 2,
 }
 
 class VismolObject:
@@ -900,7 +910,7 @@ class VismolObject:
 
         Diferenca-chave em relacao ao codigo original: o grau de cada atomo
         usado no teste de valencia e' calculado LOCALMENTE a partir apenas
-        dos pares recebidos (dict 'degree' abaixo) -- NAO mexe em
+        dos pares recebidos (dict 'degree' interno) -- NAO mexe em
         self.atoms[i].nbonds nem em nenhum outro estado persistente do
         objeto. Isso permite chamar esta funcao repetidamente com listas de
         pares DIFERENTES (ex.: a conectividade de cada frame das Dynamic
@@ -908,16 +918,66 @@ class VismolObject:
         chamada "contamine" a proxima com graus inflados de uma chamada
         anterior.
 
-        Mesma regra de duas passadas de _bonds_from_pair_of_indexes_list
-        (dupla primeiro, tripla so' promove quem ja e' dupla).
+        [EN] HISTORICO / BUG FIX (aneis conjugados): a atribuicao de duplas
+        era feita com um GULOSO de uma passada so' (primeira ligacao
+        "candidata" -- ambos atomos com folga -- na ordem em que aparece no
+        array e' promovida). Isso e', na pratica, uma selecao gulosa de
+        arestas para um problema de CASAMENTO MAXIMO -- e selecao gulosa de
+        casamento e' conhecida por depender da ordem de visita. Na pratica:
+        o MESMO 1,3-butadieno (CH2=CH-CH=CH2) dava a estrutura certa (duplas
+        nas pontas) se a ligacao central aparecesse por ultimo no arquivo,
+        mas dava uma estrutura QUIMICAMENTE INVALIDA (dupla so' no meio,
+        atomo de ponta com valencia faltando) se a ligacao central aparecesse
+        primeiro -- mesma molecula, mesma topologia, resposta diferente e as
+        vezes errada, so' por causa da ordem de escrita do arquivo/parser.
+        Aneis fundidos/aromaticos com heteroatomo (ex. imidazol em
+        histidina/purinas) tinham o mesmo problema.
+
+        Corrigido delegando a decisao de quais ligacoes promover a dupla
+        para um CASAMENTO MAXIMO EXATO por componente conexo (ver
+        bond_order_perception.perceive_bond_order_for_pairs_pure) -- da'
+        sempre a mesma resposta independente da ordem de entrada, e resolve
+        aneis conjugados corretamente. Continua rapido porque o problema so'
+        e' resolvido dentro dos poucos atomos realmente conjugados (o resto
+        da molecula, ex. cadeia principal sp3 de uma proteina, nem entra no
+        grafo de candidatas).
+
+        Mesma regra de duas passadas de sempre (dupla primeiro, tripla so'
+        promove quem ja e' dupla).
         """
         ib = np.asarray(flat_pairs).ravel()
         n_bonds = int(ib.shape[0] // 2)
         if n_bonds == 0:
             return np.ones(0, dtype=np.uint32)
 
-        # Grau local: quantos parceiros cada atomo tem DENTRO DESTE conjunto
-        # de pares -- nao o grau da molecula inteira (self.atoms[i].nbonds).
+        symbols = [self.atoms[i].symbol for i in range(len(self.atoms))]
+
+        try:
+            from vismol.core.bond_order_perception import perceive_bond_order_for_pairs_pure
+        except Exception:
+            try:
+                from core.bond_order_perception import perceive_bond_order_for_pairs_pure
+            except Exception:
+                try:
+                    from bond_order_perception import perceive_bond_order_for_pairs_pure
+                except Exception as e:
+                    logger.warning("bond_order_perception (casamento maximo) "
+                                   "indisponivel (%s); usando fallback guloso "
+                                   "local." % e)
+                    return self._perceive_bond_order_for_pairs_greedy_fallback(ib, symbols)
+
+        order = perceive_bond_order_for_pairs_pure(symbols, ib, GABEDIT_MAX_VALENCE)
+        return np.asarray(order, dtype=np.uint32)
+
+    def _perceive_bond_order_for_pairs_greedy_fallback(self, ib, symbols):
+        """ Fallback local -- o algoritmo guloso de uma passada so' (com o
+            bug de case do GABEDIT_MAX_VALENCE ja corrigido), usado APENAS
+            se o modulo bond_order_perception nao puder ser importado por
+            algum motivo. Mantido para nunca quebrar o carregamento da
+            estrutura; sabidamente sujeito ao problema de ordem descrito em
+            perceive_bond_order_for_pairs (nao usar como caminho principal).
+        """
+        n_bonds = int(ib.shape[0] // 2)
         degree = {}
         for k in range(n_bonds):
             i = int(ib[2 * k]); j = int(ib[2 * k + 1])
@@ -926,23 +986,21 @@ class VismolObject:
 
         order = np.ones(n_bonds, dtype=np.uint32)
 
-        # duplas
         for k in range(n_bonds):
             i = int(ib[2 * k]); j = int(ib[2 * k + 1])
-            max_i = GABEDIT_MAX_VALENCE.get(self.atoms[i].symbol, 4)
-            max_j = GABEDIT_MAX_VALENCE.get(self.atoms[j].symbol, 4)
+            max_i = GABEDIT_MAX_VALENCE.get(symbols[i], 4)
+            max_j = GABEDIT_MAX_VALENCE.get(symbols[j], 4)
             if degree[i] < max_i and degree[j] < max_j:
                 order[k] = 2
                 degree[i] += 1
                 degree[j] += 1
 
-        # triplas -- so' promove quem ja e' dupla (bug fix ja aplicado aqui)
         for k in range(n_bonds):
             if order[k] != 2:
                 continue
             i = int(ib[2 * k]); j = int(ib[2 * k + 1])
-            max_i = GABEDIT_MAX_VALENCE.get(self.atoms[i].symbol, 4)
-            max_j = GABEDIT_MAX_VALENCE.get(self.atoms[j].symbol, 4)
+            max_i = GABEDIT_MAX_VALENCE.get(symbols[i], 4)
+            max_j = GABEDIT_MAX_VALENCE.get(symbols[j], 4)
             if degree[i] < max_i and degree[j] < max_j:
                 order[k] = 3
                 degree[i] += 1

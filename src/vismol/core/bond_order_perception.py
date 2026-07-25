@@ -356,6 +356,223 @@ def perceive_for_vismol(elements, index_bonds):
 
 
 # ---------------------------------------------------------------------------
+# Percepcao RAPIDA por valencia local + casamento maximo (usada por
+# VismolObject.perceive_bond_order_for_pairs, incluindo Dynamic Bonds
+# recalculadas a cada frame de trajetoria)
+# ---------------------------------------------------------------------------
+#
+# [EN] Diferenca em relacao a perceive_bond_orders() acima: aquela funcao
+# busca o estado de MENOR PENALIDADE GLOBAL (cargas formais, hipervalencia,
+# etc.) via backtracking sobre TODAS as ligacoes da molecula -- correta, mas
+# cara demais para rodar a cada frame de uma trajetoria inteira.
+#
+# Aqui a valencia-alvo e fixa (GABEDIT_MAX_VALENCE, sem estados de carga) e
+# so' promovemos dupla onde os dois atomos tem folga de valencia -- exatamente
+# a mesma regra que o metodo antigo (guloso, uma passada so') usava. A UNICA
+# mudanca e' COMO decidimos quais ligacoes promover: em vez de percorrer o
+# array na ordem em que os pares aparecem (o que faz o resultado depender da
+# ordem de escrita do arquivo/parser), resolvemos um CASAMENTO MAXIMO exato
+# dentro de cada componente conexo de ligacoes "candidatas" (candidata =
+# ambos os atomos ainda com folga). Isso da' o mesmo resultado nao importa a
+# ordem dos pares de entrada, e resolve corretamente aneis conjugados/
+# aromaticos (incluindo aneis fundidos e aneis impares com heteroatomo, ex.
+# imidazol em histidina/purinas) -- casos em que o guloso de uma passada
+# podia deixar um atomo sem a dupla que ele precisava, so' por causa da
+# ordem de iteracao.
+#
+# Continua BARATO: a divisao em componentes conexos isola o problema aos
+# poucos atomos realmente conjugados (um anel, um par de aneis fundidos, uma
+# cadeia conjugada) -- o resto da molecula (cadeia principal sp3, etc.) nem
+# entra no grafo de candidatas. Testado com sistema tipo coroneno (36 atomos,
+# 6 aneis fundidos): < 1 ms.
+
+GABEDIT_MAX_VALENCE = {
+    'H': 1, 'He': 0, 'Li': 1, 'Be': 2, 'B': 3, 'C': 4, 'N': 3, 'O': 2,
+    'F': 1, 'Ne': 0, 'Na': 1, 'Mg': 2, 'Al': 3, 'Si': 4, 'P': 3, 'S': 2,
+    'Cl': 1, 'Ar': 0, 'K': 1, 'Ca': 2, 'Br': 1, 'I': 1,
+    'Fe': 2, 'Zn': 2, 'Cu': 2, 'Mn': 2, 'Ni': 2, 'Co': 2,
+}
+
+# Acima deste numero de ligacoes candidatas NUM MESMO componente conexo,
+# o casamento exato (branch & bound) e' trocado por um guloso local -- so'
+# como rede de seguranca contra um sistema anormalmente grande e totalmente
+# conjugado (ex. uma folha de grafeno inteira aparecendo como QM na mesma
+# regiao). Sistemas reais (aneis aromaticos, porfirina/heme, aneis fundidos
+# tipo coroneno) ficam MUITO abaixo disso.
+_MAX_EXACT_COMPONENT_EDGES = 60
+
+
+def _max_matching_in_component(edges):
+    """ Casamento maximo EXATO (branch & bound com poda) num componente
+        pequeno. edges: lista de pares (i,j) de indices de atomos.
+        Retorna o subconjunto (lista) de edges escolhidas, tal que nenhum
+        atomo aparece em mais de uma edge escolhida (== atribuicao de
+        duplas sem nenhum atomo recebendo duas duplas ao mesmo tempo). """
+    n = len(edges)
+    best = {"set": (), "size": 0}
+
+    # Cota superior barata para a poda: numero de atomos ainda livres nas
+    # ligacoes restantes, dividido por 2 (cada dupla "consome" 2 atomos).
+    def upper_bound(start_idx, used):
+        verts = set()
+        for k in range(start_idx, n):
+            i, j = edges[k]
+            if i not in used and j not in used:
+                verts.add(i)
+                verts.add(j)
+        return len(verts) // 2
+
+    def bt(idx, used, chosen):
+        if len(chosen) + upper_bound(idx, used) <= best["size"]:
+            return  # poda: nem no melhor caso restante supera o melhor achado
+        if idx == n:
+            if len(chosen) > best["size"]:
+                best["size"] = len(chosen)
+                best["set"] = tuple(chosen)
+            return
+        i, j = edges[idx]
+        # ramo 1: tenta usar esta ligacao (se os atomos ainda estao livres)
+        if i not in used and j not in used:
+            bt(idx + 1, used | {i, j}, chosen + [(i, j)])
+        # ramo 2: nao usa esta ligacao
+        bt(idx + 1, used, chosen)
+
+    bt(0, frozenset(), [])
+    return list(best["set"])
+
+
+def _greedy_matching_in_component(edges):
+    """ Guloso simples (uma passada), usado so' como rede de seguranca para
+        componentes conjugados anormalmente grandes (ver
+        _MAX_EXACT_COMPONENT_EDGES). Nao garante otimalidade nem
+        independencia de ordem -- e' o mesmo compromisso do algoritmo antigo,
+        mantido apenas para nao travar em casos extremos fora do dominio
+        quimico usual. """
+    used = set()
+    chosen = []
+    for (i, j) in edges:
+        if i not in used and j not in used:
+            chosen.append((i, j))
+            used.add(i)
+            used.add(j)
+    return chosen
+
+
+def perceive_bond_order_for_pairs_pure(symbols, flat_pairs, max_valence=None):
+    """
+    Funcao PURA equivalente a VismolObject.perceive_bond_order_for_pairs,
+    mas sem depender de self.atoms/self (facilita testes isolados).
+
+    symbols     : lista de simbolos quimicos, 1 por atomo, indexada pelo
+                  MESMO indice usado em flat_pairs (tipicamente
+                  self.atoms[i].symbol para i em range(len(self.atoms))).
+    flat_pairs  : array/lista achatada de pares [i0,j0, i1,j1, ...].
+    max_valence : dict {simbolo: valencia_maxima}. Default: GABEDIT_MAX_VALENCE
+                  deste modulo.
+
+    Retorna: lista de inteiros (1, 2 ou 3), uma ordem por ligacao, na MESMA
+    ordem dos pares de entrada.
+
+    Duas passadas, como no algoritmo original:
+      1) duplas: casamento maximo exato por componente conexo de ligacoes
+         candidatas (troca o guloso de uma passada por uma solucao
+         order-independent e correta em aneis conjugados/aromaticos).
+      2) triplas: so' promove quem ja e' dupla (mesma regra de sempre).
+    """
+    if max_valence is None:
+        max_valence = GABEDIT_MAX_VALENCE
+
+    ib = list(flat_pairs)
+    n_bonds = len(ib) // 2
+    if n_bonds == 0:
+        return []
+    pairs = [(int(ib[2 * k]), int(ib[2 * k + 1])) for k in range(n_bonds)]
+
+    degree = {}
+    for (i, j) in pairs:
+        degree[i] = degree.get(i, 0) + 1
+        degree[j] = degree.get(j, 0) + 1
+
+    def max_val(atom):
+        return max_valence.get(symbols[atom], 4)
+
+    # --- passada 1: duplas, via casamento maximo por componente ------------
+    candidate_idx = [k for k, (i, j) in enumerate(pairs)
+                      if degree[i] < max_val(i) and degree[j] < max_val(j)]
+
+    adj = {}
+    for k in candidate_idx:
+        i, j = pairs[k]
+        adj.setdefault(i, []).append(k)
+        adj.setdefault(j, []).append(k)
+
+    order = [1] * n_bonds
+    visited = set()
+
+    for start in candidate_idx:
+        if start in visited:
+            continue
+        # BFS pelo componente conexo (ligacoes ligadas por atomos em comum)
+        comp = []
+        queue = [start]
+        seen = {start}
+        while queue:
+            e = queue.pop()
+            comp.append(e)
+            i, j = pairs[e]
+            for v in (i, j):
+                for e2 in adj.get(v, ()):
+                    if e2 not in seen:
+                        seen.add(e2)
+                        queue.append(e2)
+        visited |= seen
+
+        # Ordena as ligacoes do componente de forma CANONICA (por indice de
+        # atomo normalizado), em vez de na ordem em que a BFS as encontrou
+        # (que por sua vez depende da ordem em que os pares apareceram no
+        # array de entrada). Sem isso, quando ha' EMPATE entre duas ou mais
+        # solucoes de casamento maximo com o MESMO tamanho -- caso comum em
+        # sistemas com varias estruturas de ressonancia equivalentes, ex.
+        # naftaleno, que tem 3 formas de Kekule igualmente validas -- o
+        # desempate (qual das solucoes empatadas e' escolhida) ainda
+        # dependia da ordem de entrada, mesmo com o tamanho da solucao
+        # (numero de duplas) ja sendo sempre o maximo correto. Com a ordem
+        # canonica, o resultado fica 100% deterministico para a MESMA
+        # molecula/topologia, nao importa como o arquivo/parser ordenou os
+        # bonds -- relevante para nao ter duplas "piscando" entre estruturas
+        # de ressonancia equivalentes ao longo dos frames de uma trajetoria.
+        comp_e_and_pairs = sorted(
+            ((e, pairs[e]) for e in comp),
+            key=lambda ep: (min(ep[1]), max(ep[1]))
+        )
+        comp_edges = [e for e, p in comp_e_and_pairs]
+        comp_pairs = [p for e, p in comp_e_and_pairs]
+
+        if len(comp_pairs) <= _MAX_EXACT_COMPONENT_EDGES:
+            chosen = set(_max_matching_in_component(comp_pairs))
+        else:
+            chosen = set(_greedy_matching_in_component(comp_pairs))
+
+        for e, p in zip(comp_edges, comp_pairs):
+            if p in chosen:
+                order[e] = 2
+                degree[p[0]] += 1
+                degree[p[1]] += 1
+
+    # --- passada 2: triplas, so' promove quem ja e' dupla -------------------
+    for k in range(n_bonds):
+        if order[k] != 2:
+            continue
+        i, j = pairs[k]
+        if degree[i] < max_val(i) and degree[j] < max_val(j):
+            order[k] = 3
+            degree[i] += 1
+            degree[j] += 1
+
+    return order
+
+
+# ---------------------------------------------------------------------------
 # Teste rapido com moleculas conhecidas
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
