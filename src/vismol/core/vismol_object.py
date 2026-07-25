@@ -942,6 +942,26 @@ class VismolObject:
         da molecula, ex. cadeia principal sp3 de uma proteina, nem entra no
         grafo de candidatas).
 
+        [EN] HISTORICO / BUG FIX (fronteira QC/MM): quando flat_pairs e' um
+        SUBCONJUNTO das ligacoes reais de um atomo -- caso das Dynamic Bonds,
+        onde find_bonded_and_nonbonded_atoms monta o grid so' com os atomos
+        da selecao/regiao QC -- um atomo de fronteira (ligado tambem a um
+        atomo da regiao MM) tem essa ligacao para a MM "invisivel" aqui: ela
+        nunca aparece em flat_pairs. Sem correcao, o grau local desse atomo
+        fica subestimado em 1 (ou mais), e o algoritmo acha que ele ainda
+        tem folga de valencia que na verdade ja foi consumida pela ligacao
+        para a regiao MM -- promovendo indevidamente uma ligacao vizinha
+        (dentro da regiao QC) a dupla perto da fronteira.
+
+        Corrigido comparando, para cada atomo presente em flat_pairs, o grau
+        local (dentro deste subconjunto) com self.atoms[i].nbonds -- a
+        contagem REAL de ligacoes desse atomo, calculada uma unica vez sobre
+        a estrutura estatica completa (QC+MM juntos) no carregamento do
+        sistema, antes de qualquer selecao Dynamic Bonds existir. A diferenca
+        (nbonds real - grau local aqui) e' passada para
+        perceive_bond_order_for_pairs_pure via extra_degree, que "pre-
+        consome" essa valencia antes da primeira passada.
+
         Mesma regra de duas passadas de sempre (dupla primeiro, tripla so'
         promove quem ja e' dupla).
         """
@@ -951,6 +971,27 @@ class VismolObject:
             return np.ones(0, dtype=np.uint32)
 
         symbols = [self.atoms[i].symbol for i in range(len(self.atoms))]
+
+        # Grau local dentro APENAS deste subconjunto de pares (pode ser
+        # menor que o grau real do atomo, se flat_pairs for um recorte --
+        # ex.: Dynamic Bonds restritas a' regiao QC).
+        local_degree = {}
+        for k in range(n_bonds):
+            i = int(ib[2 * k]); j = int(ib[2 * k + 1])
+            local_degree[i] = local_degree.get(i, 0) + 1
+            local_degree[j] = local_degree.get(j, 0) + 1
+
+        # Diferenca entre o grau REAL (estrutura estatica completa,
+        # self.atoms[i].nbonds) e o grau visivel neste subconjunto -- so'
+        # atomos de fronteira (com ligacoes fora do subconjunto, tipicamente
+        # para a regiao MM) tem diferenca > 0 aqui.
+        extra_degree = {}
+        for atom_idx in local_degree:
+            true_n = getattr(self.atoms[atom_idx], "nbonds", None)
+            if true_n is not None:
+                missing = int(true_n) - local_degree[atom_idx]
+                if missing > 0:
+                    extra_degree[atom_idx] = missing
 
         try:
             from vismol.core.bond_order_perception import perceive_bond_order_for_pairs_pure
@@ -964,17 +1005,20 @@ class VismolObject:
                     logger.warning("bond_order_perception (casamento maximo) "
                                    "indisponivel (%s); usando fallback guloso "
                                    "local." % e)
-                    return self._perceive_bond_order_for_pairs_greedy_fallback(ib, symbols)
+                    return self._perceive_bond_order_for_pairs_greedy_fallback(
+                        ib, symbols, extra_degree)
 
-        order = perceive_bond_order_for_pairs_pure(symbols, ib, GABEDIT_MAX_VALENCE)
+        order = perceive_bond_order_for_pairs_pure(symbols, ib, GABEDIT_MAX_VALENCE,
+                                                     extra_degree=extra_degree)
         return np.asarray(order, dtype=np.uint32)
 
-    def _perceive_bond_order_for_pairs_greedy_fallback(self, ib, symbols):
+    def _perceive_bond_order_for_pairs_greedy_fallback(self, ib, symbols, extra_degree=None):
         """ Fallback local -- o algoritmo guloso de uma passada so' (com o
-            bug de case do GABEDIT_MAX_VALENCE ja corrigido), usado APENAS
-            se o modulo bond_order_perception nao puder ser importado por
-            algum motivo. Mantido para nunca quebrar o carregamento da
-            estrutura; sabidamente sujeito ao problema de ordem descrito em
+            bug de case do GABEDIT_MAX_VALENCE ja corrigido e a correcao de
+            fronteira QC/MM via extra_degree), usado APENAS se o modulo
+            bond_order_perception nao puder ser importado por algum motivo.
+            Mantido para nunca quebrar o carregamento da estrutura; sabidamente
+            sujeito ao problema de ordem descrito em
             perceive_bond_order_for_pairs (nao usar como caminho principal).
         """
         n_bonds = int(ib.shape[0] // 2)
@@ -983,6 +1027,11 @@ class VismolObject:
             i = int(ib[2 * k]); j = int(ib[2 * k + 1])
             degree[i] = degree.get(i, 0) + 1
             degree[j] = degree.get(j, 0) + 1
+
+        if extra_degree:
+            for atom, extra in extra_degree.items():
+                if atom in degree and extra > 0:
+                    degree[atom] += extra
 
         order = np.ones(n_bonds, dtype=np.uint32)
 

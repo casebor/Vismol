@@ -458,7 +458,8 @@ def _greedy_matching_in_component(edges):
     return chosen
 
 
-def perceive_bond_order_for_pairs_pure(symbols, flat_pairs, max_valence=None):
+def perceive_bond_order_for_pairs_pure(symbols, flat_pairs, max_valence=None,
+                                        extra_degree=None):
     """
     Funcao PURA equivalente a VismolObject.perceive_bond_order_for_pairs,
     mas sem depender de self.atoms/self (facilita testes isolados).
@@ -469,6 +470,22 @@ def perceive_bond_order_for_pairs_pure(symbols, flat_pairs, max_valence=None):
     flat_pairs  : array/lista achatada de pares [i0,j0, i1,j1, ...].
     max_valence : dict {simbolo: valencia_maxima}. Default: GABEDIT_MAX_VALENCE
                   deste modulo.
+    extra_degree: dict opcional {indice_do_atomo: N}. Usado para "pre-
+                  consumir" N unidades de valencia de um atomo ANTES da
+                  primeira passada -- necessario quando flat_pairs e' um
+                  SUBCONJUNTO das ligacoes reais do atomo (ex.: Dynamic
+                  Bonds na fronteira QC/MM: find_bonded_and_nonbonded_atoms
+                  so' monta o grid com os atomos da SELECAO/regiao QC, entao
+                  a ligacao que um atomo de fronteira tem para a regiao MM
+                  nunca aparece em flat_pairs. Sem isso, o grau local desse
+                  atomo fica subestimado, e o algoritmo acha que ele tem
+                  folga de valencia que na verdade ja foi consumida pela
+                  ligacao "invisivel" para a regiao MM -- promovendo uma
+                  ligacao vizinha a dupla indevidamente). Ver
+                  VismolObject.perceive_bond_order_for_pairs para como esse
+                  dict e' calculado (self.atoms[i].nbonds, a contagem real
+                  de ligacoes da estrutura estatica completa, menos o grau
+                  local dentro do subconjunto recebido aqui).
 
     Retorna: lista de inteiros (1, 2 ou 3), uma ordem por ligacao, na MESMA
     ordem dos pares de entrada.
@@ -492,6 +509,11 @@ def perceive_bond_order_for_pairs_pure(symbols, flat_pairs, max_valence=None):
     for (i, j) in pairs:
         degree[i] = degree.get(i, 0) + 1
         degree[j] = degree.get(j, 0) + 1
+
+    if extra_degree:
+        for atom, extra in extra_degree.items():
+            if atom in degree and extra > 0:
+                degree[atom] += extra
 
     def max_val(atom):
         return max_valence.get(symbols[atom], 4)
