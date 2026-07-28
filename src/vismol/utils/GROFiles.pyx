@@ -8,7 +8,7 @@ import multiprocessing
 import numpy as np
 cimport numpy as np
 from vismol.core.vismol_object import VismolObject
-from vismol.model.molecular_properties import AtomTypes
+#from vismol.model.molecular_properties import AtomTypes
 
 from pprint import pprint
 
@@ -30,12 +30,19 @@ cpdef load_gro_file(infile=None, gridsize=3, vismol_session=None):
     #-------------------------------------------------------------------------------------------
     #                                P D B     P A R S E R 
     #-------------------------------------------------------------------------------------------
-    at  =  AtomTypes()
+    # [EN] BUG FIX: 'at = AtomTypes()' -- AtomTypes nao existe mais em
+    # vismol.model.molecular_properties (o import ja' estava comentado,
+    # entao esta linha quebrava com NameError sempre que load_gro_file()
+    # era chamada -- carregar um .gro estava completamente quebrado).
+    # PDBFiles.pyx (mesmo parser, ja' modernizado) resolve isso de outro
+    # jeito: nao calcula mais o simbolo do atomo aqui -- Atom._get_symbol()
+    # ja' deriva o simbolo automaticamente a partir do nome do atomo (ver
+    # vismol/model/atom.py), entao nem precisa ser passado no dict abaixo.
     with open(infile, 'r') as gro_file:
         
         grotext = gro_file.readlines()
         
-        atoms, frame = get_atom_info_from_raw_line(grotext, gridsize = 3, at = at)
+        atoms, frame = get_atom_info_from_raw_line(grotext, gridsize = 3)
         frame = np.array(frame, dtype=np.float32)
         frames = [frame]
         #frames = []
@@ -107,27 +114,22 @@ cpdef get_atom_info_from_raw_line(lines, gridsize = 3, at =  None):
         
         at_ch      = 'X'          
 
-        at_symbol  = at.get_symbol(at_name)
-
-
         at_occup   = 0.0   #occupancy
         at_bfactor = 0.0
         at_charge  = 0.0
 
-        cov_rad  = at.get_cov_rad (at_symbol)
         gridpos  = [int(at_pos[0]/gridsize), int(at_pos[1]/gridsize), int(at_pos[2]/gridsize)]
         #ocupan   = float(line[54:60])
         #bfactor  = float(line[60:66])
 
-                        #0      1        2        3       4        5        6       7       8       9       10          11        12      
-        #atoms.append([index, at_name, cov_rad,  at_pos, at_resi, at_resn, at_ch, at_symbol, [], gridpos, at_occup, at_bfactor, at_charge ])
+                        #0      1        2        3       4        5        6       9       10          11        12      
+        #atoms.append([index, at_name, at_pos, at_resi, at_resn, at_ch, [], gridpos, at_occup, at_bfactor, at_charge ])
         atoms.append({
                       'index'      : index      , 
                       'name'       : at_name    , 
                       'resi'       : at_resi    , 
                       'resn'       : at_resn    , 
                       'chain'      : at_ch      , 
-                      'symbol'     : at_symbol  , 
                       'occupancy'  : at_occup   , 
                       'bfactor'    : at_bfactor , 
                       'charge'     : at_charge   

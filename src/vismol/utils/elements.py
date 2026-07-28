@@ -7,7 +7,7 @@ class PeriodicTable:
         self.elements_by_number = {}
         
         if external:
-            self.elements_by_symbol = exeternal
+            self.elements_by_symbol = external
         else:
             self.elements_by_symbol = { # sym      num   name                   RGB                 mass       disp_r      cov_r    vdw_r    r_UFF   En_UFF
                                    #"H"  : [  1 , "Hydrogen"      , [1.0000 , 1.0000 , 1.0000] ,   1.00794,   0.230000 , 0.330000 , 1.200   ] ,

@@ -23,6 +23,7 @@
 #  
 
 import numpy as np
+from vismol.model.molecular_properties import residues_dictionary, solvent_dictionary
 
 
 

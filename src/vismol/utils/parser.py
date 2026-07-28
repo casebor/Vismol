@@ -28,7 +28,7 @@ import time
 import numpy as np
 from logging import getLogger
 from vismol.utils import AUXFiles
-#from vismol.utils import GROFiles
+from vismol.utils import GROFiles
 from vismol.utils import MOL2Files
 from vismol.utils import PDBFiles
 from vismol.utils import PSFFiles
@@ -50,7 +50,15 @@ def _load_aux_file(vismol_session, infile):
 def _load_gro_file(vismol_session, infile):
     """ Function doc
     """
-    vismol_object = GROFiles.load_gro_file(infile, vismol_session)
+    # [EN] BUG FIX: import de GROFiles estava comentado, entao esta
+    # funcao quebrava com NameError sempre que chamada (carregar um
+    # arquivo .gro estava completamente quebrado). Alem disso, a chamada
+    # usava argumentos posicionais (infile, vismol_session), mas a
+    # assinatura real de load_gro_file() e' (infile, gridsize,
+    # vismol_session) -- ou seja, vismol_session estava sendo passado
+    # para o parametro gridsize por engano. Corrigido usando keyword
+    # arguments, que nao dependem da ordem.
+    vismol_object = GROFiles.load_gro_file(infile=infile, vismol_session=vismol_session)
     vismol_object.set_model_matrix(vismol_session.vm_widget.vm_glcore.model_mat)
     return vismol_object
 
