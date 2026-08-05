@@ -424,8 +424,17 @@ class VismolObject:
         elif rep_type == "dynamic":
             # Create a SticksRepresentation object with 'dynamic' flag and add it to the 'representations' dictionary
             #print(self.dynamic_bonds)
+            # [NOVO] Cor unica opcional para as dynamic bonds, lida das
+            # preferencias (EasyHybrid Preferences). Se 'dynamic_bonds_single_color'
+            # estiver ligado, usa 'dynamic_bonds_color' (RGB/RGBA, branco por
+            # padrao); senao mantem a cor por atomo (uniform_color = None).
+            gp = self.vm_session.vm_config.gl_parameters
+            dyn_uniform_color = None
+            if gp.get("dynamic_bonds_single_color", False):
+                dyn_uniform_color = gp.get("dynamic_bonds_color", [1.0, 1.0, 1.0, 1.0])
             self.representations["dynamic"] = SticksRepresentation(self, self.vm_session.vm_glcore,
-                                                                  active=True, indexes=self.index_bonds, is_dynamic = True)
+                                                                  active=True, indexes=self.index_bonds, is_dynamic = True,
+                                                                  uniform_color = dyn_uniform_color)
         
         elif rep_type == "labels":
             # Create a LabelRepresentation object and add it to the 'representations' dictionary

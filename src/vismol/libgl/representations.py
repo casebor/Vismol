@@ -764,7 +764,7 @@ class NonBondedRepresentation(Representation):
 class SticksRepresentation(Representation):
     """ Class doc """
     
-    def __init__(self, vismol_object, vismol_glcore, indexes, active=True, is_dynamic = False, name = "sticks"):
+    def __init__(self, vismol_object, vismol_glcore, indexes, active=True, is_dynamic = False, name = "sticks", uniform_color = None):
         """ Class initialiser """
         super(SticksRepresentation, self).__init__(vismol_object, vismol_glcore, name, active, indexes, is_dynamic)
         if  name == "sticks":
@@ -775,6 +775,40 @@ class SticksRepresentation(Representation):
             #print(set(indexes))
             self.spheres = SpheresRepresentation(vismol_object, vismol_glcore,
                                             active=True, indexes=list(vismol_object.atoms.keys()))
+
+        # [NOVO] Cor unica opcional para as ligacoes (ex.: dynamic bonds em
+        # branco). None => comportamento original (cor por atomo). Ver
+        # set_uniform_color / _load_color_vbo / _make_gl_representation_vao_and_vbos.
+        self.uniform_color = None
+        if uniform_color is not None:
+            self.set_uniform_color(uniform_color)
+
+    def set_uniform_color(self, rgb):
+        """Define uma cor solida para TODAS as ligacoes desta representacao.
+
+        rgb: (R,G,B) ou (R,G,B,A); aceita [0,1] ou [0,255]; alfa e' ignorado.
+        Marca uses_uniform_color=True (para recoloracao por atomo pular esta
+        rep) e was_col_modified=True (para o buffer subir a GPU no proximo draw).
+        """
+        rgb = np.array(rgb, dtype=np.float32).ravel()[:3]
+        if np.any(rgb > 1.0):
+            rgb = rgb / 255.0
+        self.uniform_color = rgb
+        self.uses_uniform_color = True
+        self.was_col_modified = True
+
+    def clear_uniform_color(self):
+        """Volta ao comportamento padrao (cor por atomo)."""
+        self.uniform_color = None
+        self.uses_uniform_color = False
+        self.was_col_modified = True
+
+    def _uniform_color_array(self):
+        """Array de cor com UMA entrada por atomo do objeto (mesmo racional de
+        OneColorDotsRepresentation._set_uniform_color: o desenho e' por indices
+        sobre o array de coordenadas completo)."""
+        n_atoms = self.vm_object.frames[0].shape[0]
+        return np.tile(self.uniform_color, (n_atoms, 1)).astype(np.float32)
             
 
     def set_radius (self, radius):
@@ -883,6 +917,11 @@ class SticksRepresentation(Representation):
             entao nao depende do esquema de atributo por-vertice/por-atomo
             (ver _get_bond_order_per_bond acima e sticks.py). """
         super(SticksRepresentation, self)._make_gl_representation_vao_and_vbos()
+        # [NOVO] Se uma cor unica foi definida, substitui o col_vbo (que a base
+        # acabou de montar com as cores por atomo) por um buffer preenchido com
+        # a cor solida. Reaproveita todo o resto (coord/ind/bond-order).
+        if self.uniform_color is not None:
+            self.col_vbo = self._make_gl_color_buffer(self._uniform_color_array(), self.shader_program)
         orders = self._get_bond_order_per_bond()
         self.bond_order_tbo_buf, self.bond_order_tex = self._make_gl_bond_order_texture_buffer(orders)
         self._bond_order_tbo_size = orders.shape[0]
@@ -949,7 +988,11 @@ class SticksRepresentation(Representation):
             self._load_ind_vbo(ind_vbo=True)
             self.was_rep_ind_modified = False
         if self.was_col_modified:
-            self._load_color_vbo(None)
+            # [NOVO] com cor unica ativa, recarrega com a cor solida
+            if self.uniform_color is not None:
+                self._load_color_vbo(self._uniform_color_array())
+            else:
+                self._load_color_vbo(None)
             self.was_col_modified = False
         
         # Reenvia bond_order_list para a Buffer Texture sempre que desenha.

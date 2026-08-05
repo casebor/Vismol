@@ -49,6 +49,26 @@ class VismolGTKWidget(Gtk.GLArea):
         """ Class initialiser
         """
         super(VismolGTKWidget, self).__init__()
+        # [EN] BUG FIX (real-world report: the app crashes/quits silently
+        # on macOS, with the actual GtkGLArea widget suspected as the
+        # cause). This widget's GL context was never given an explicit
+        # required version -- meaning it relied entirely on GTK's own
+        # DEFAULT context-negotiation behaviour, which on Linux/Mesa
+        # tends to hand back something recent enough to run our
+        # #version 330 shaders (geometry shaders, needed for the double/
+        # triple bond rendering worked on earlier -- require OpenGL 3.2+
+        # core) without ever being asked explicitly. macOS has NO
+        # compatibility profile for OpenGL 3+ at all (confirmed via
+        # Apple's own developer forums/documentation: only a "Legacy"
+        # profile capped at the pre-3.2 feature set, or a strict Core
+        # profile, nothing in between) -- so without requesting the
+        # right version/profile up front, GTK's quartz backend may
+        # negotiate a context our shaders can't actually use, or fail to
+        # realize a usable context at all. set_required_version(3, 3)
+        # asks for exactly what #version 330 needs, on every platform,
+        # instead of leaving it to a default that happens to work on
+        # Linux by coincidence rather than by being explicitly correct.
+        self.set_required_version(3, 3)
         self.connect("realize", self.initialize)
         self.connect("render", self.render)
         self.connect("resize", self.reshape)
@@ -87,11 +107,34 @@ class VismolGTKWidget(Gtk.GLArea):
                          program will be changed change this value to True
         """
         if self.get_error() != None:
-            dprint(self.get_error().args)
-            dprint(self.get_error().code)
-            dprint(self.get_error().domain)
-            dprint(self.get_error().message)
+            # [EN] BUG FIX (real-world report: the app crashes/quits
+            # silently on macOS, GtkGLArea suspected): this used to
+            # report the error ONLY via dprint() -- which is SILENT
+            # unless the EASYHYBRID_DEBUG=1 environment variable happens
+            # to be set (see vismol/utils/debug.py) -- and then call
+            # Gtk.main_quit() immediately, closing the whole application
+            # with literally no visible explanation at all. Whatever the
+            # underlying GL context failure actually was (e.g. exactly
+            # the kind of version/profile mismatch set_required_version()
+            # above is now meant to prevent) was completely invisible to
+            # anyone not already running with that debug flag on --
+            # indistinguishable from the app just silently dying for no
+            # reason. Now always printed (not gated behind the debug
+            # flag) before quitting, so at minimum the terminal shows
+            # WHY, instead of nothing.
+            error = self.get_error()
+            print("FATAL: OpenGL context could not be created -- EasyHybrid cannot start.")
+            print("  args:   ", error.args if error is not None else None)
+            print("  code:   ", error.code if error is not None else None)
+            print("  domain: ", error.domain if error is not None else None)
+            print("  message:", error.message if error is not None else None)
+            print("This usually means the GTK GLArea widget could not negotiate an OpenGL "
+                  "3.3+ core context with your system's graphics driver. On macOS in "
+                  "particular, this is a known area of difficulty for GTK3's own OpenGL "
+                  "support -- see https://gitlab.gnome.org/GNOME/gtk (GTK3 quartz/macOS "
+                  "backend) for the current state of this.")
             Gtk.main_quit()
+            return
         self.vm_glcore.initialize()
     
     def reshape(self, widget, width, height):
