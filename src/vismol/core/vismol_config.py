@@ -87,6 +87,33 @@ class VismolConfig:
                               "picking_dots_safe"          : True,
                               "pk_label_color"             : [1.0, 1.0, 1.0, 1.0],
                               "pk_dist_label_color"        : [1.0, 1.0, 0.0, 1.0],
+                              # Font family (bundled .ttf filename, see
+                              # vismol/libgl/fonts/) and size used to draw
+                              # every text label in the glArea: atom
+                              # labels, picking labels (#1, #2, ...) and
+                              # distance labels. Customizable via the
+                              # Preferences window ("Labels Font (glArea)").
+                              "label_font_file"            : "Amiko-SemiBold.ttf",
+                              "label_font_size"            : 0.35,
+                              # Separate font family/size for the "Labels"
+                              # representation (atom index, MM charge,
+                              # residue name/index, chain -- see
+                              # 'label_content' below), customizable
+                              # independently from the picking/distance
+                              # labels above via the Preferences window
+                              # ("Atom Labels (glArea)").
+                              "atom_label_font_file"       : "Amiko-SemiBold.ttf",
+                              "atom_label_font_size"       : 0.35,
+                              # What text each atom's persistent "Labels"
+                              # representation shows: one of 'name',
+                              # 'symbol', 'index', 'mm_charge',
+                              # 'residue_name', 'residue_index', 'chain'.
+                              # Set/applied from the Preferences window
+                              # ("Atom Labels (glArea)"). The same options
+                              # are also available per-selection via the
+                              # glArea right-click menu (Show > labels).
+                              "label_content"              : "name",
+                              "label_show_all"             : False,
                               }
         self.n_proc = 2
         # self.representations_available = {"dots", "lines", "nonbonded", "dotted_lines",
@@ -118,6 +145,16 @@ class VismolConfig:
         """ Function doc """
         if not os.path.isfile(config_path):
           config_path = os.path.join(os.environ["HOME"], ".VisMol", "VismolConfig.json")
+        # Keep a copy of the built-in defaults (set in __init__) so that
+        # keys added in newer versions (e.g. 'label_font_file',
+        # 'label_font_size') are still present even when loading an older
+        # config file saved to disk before those keys existed. Without
+        # this, code that indexes gl_parameters[key] directly (instead of
+        # .get(key, default)) could raise KeyError after an update.
+        defaults = self.gl_parameters
         with open(config_path, "r") as config_file:
-            self.gl_parameters = json.load(config_file)
+            loaded = json.load(config_file)
+        merged = dict(defaults)
+        merged.update(loaded)
+        self.gl_parameters = merged
     

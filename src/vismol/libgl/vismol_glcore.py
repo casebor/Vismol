@@ -30,6 +30,8 @@ from logging import getLogger
 from vismol.libgl.glaxis import GLAxis
 from vismol.libgl.glcamera import GLCamera
 from vismol.libgl.vismol_font import VismolFont
+from vismol.libgl.vismol_font import resolve_font_path, list_available_fonts
+from vismol.libgl.vismol_font import DEFAULT_FONT_FILE, DEFAULT_FONT_SIZE
 from vismol.libgl.selection_box import SelectionBox
 import vismol.libgl.shapes as shapes
 import vismol.libgl.shaders.pick as shaders_pick
@@ -152,9 +154,21 @@ class VismolGLCore:
                                  np.array([0,0,10], dtype=np.float32),
                                  self.zero_reference_point)
         
-        self.vm_font        = VismolFont(color=[1, 1, 1, 1])
-        self.vm_font_static = VismolFont(color=[1, 1, 1, 1])
-        self.vm_font_dist   = VismolFont(char_res=264,char_width=0.17, char_height=0.17, color = [1, 1, 1, 1])
+        # Font family/size for the labels drawn in the glArea (atom labels,
+        # picking labels, distance labels) can be customized by the user
+        # in the Preferences window ("Labels Font (glArea)"). They are
+        # persisted in gl_parameters under 'label_font_file'/'label_font_size'.
+        _label_font_file = self.vm_config.gl_parameters.get("label_font_file", DEFAULT_FONT_FILE)
+        _label_font_size = self.vm_config.gl_parameters.get("label_font_size", DEFAULT_FONT_SIZE)
+        _label_font_path = resolve_font_path(_label_font_file)
+        
+        self.vm_font        = VismolFont(font_file=_label_font_path, char_width=_label_font_size,
+                                          char_height=_label_font_size, color=[1, 1, 1, 1])
+        self.vm_font_static = VismolFont(font_file=_label_font_path, char_width=_label_font_size,
+                                          char_height=_label_font_size, color=[1, 1, 1, 1])
+        self.vm_font_dist   = VismolFont(char_res=264, font_file=_label_font_path,
+                                          char_width=_label_font_size, char_height=_label_font_size,
+                                          color = [1, 1, 1, 1])
         
         self.axis = GLAxis(vm_glcore = self)
         self.selection_box = SelectionBox()

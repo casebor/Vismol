@@ -33,6 +33,7 @@ from vismol.model.residue import Residue
 from vismol.model.molecule import Molecule
 #from vismol.model.molecular_properties import COLOR_PALETTE
 from vismol.libgl.vismol_font import VismolFont
+from vismol.libgl.vismol_font import resolve_font_path, DEFAULT_FONT_FILE, DEFAULT_FONT_SIZE
 from vismol.libgl.representations import DotsRepresentation
 from vismol.libgl.representations import LinesRepresentation
 from vismol.libgl.representations import NonBondedRepresentation
@@ -122,6 +123,13 @@ class VismolObject:
                                    # Boolean flag for translate and rotate XYZ coordinates 
         
         self.mass_center = np.zeros(3, dtype=np.float32)
+        # NOTE: kept as a plain default-font VismolFont. It is NOT the
+        # font actually used to draw the "labels" representation (atom
+        # index/charge/residue name/etc.) -- that one lives on
+        # LabelRepresentation.vm_font (see vismol/libgl/representations.py),
+        # created with the family/size configured in gl_parameters
+        # ('atom_label_font_file'/'atom_label_font_size') and adjustable
+        # live from the Preferences window ("Atom Labels (glArea)").
         self.vm_font = VismolFont() # Font object used for visualization
         self.coords = None          # Set as None for now (not defined in the provided code)
         

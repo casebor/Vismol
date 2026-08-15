@@ -28,8 +28,43 @@ import numpy as np
 from OpenGL import GL
 from logging import getLogger
 from vismol.libgl.vismol_font import VismolFont
+from vismol.libgl.vismol_font import resolve_font_path, DEFAULT_FONT_FILE, DEFAULT_FONT_SIZE
 
 logger = getLogger(__name__)
+
+
+def compute_atom_label_text(atom, content):
+    """ Computes the text to display for `atom`'s label given a `content`
+        selector -- one of 'name', 'symbol', 'index', 'mm_charge',
+        'residue_name', 'residue_index', 'chain'. Mirrors the per-atom
+        logic already used by the atom-labeling context menu (see
+        gui/eSession.py, menu_show_atom_name/.../menu_show_chain), so the
+        Preferences window ("Atom Labels (glArea)") and that menu always
+        agree on how each option is computed. Never raises: falls back to
+        the atom name (or an empty string) if anything is missing (e.g.
+        no residue link, or no MM charge available for this atom yet).
+    """
+    try:
+        if content == 'symbol':
+            return atom.symbol
+        elif content == 'index':
+            return str(atom.index)
+        elif content == 'mm_charge':
+            vm_object = atom.vm_object
+            p_session = vm_object.vm_session.main.p_session
+            charge = float(p_session.psystem[vm_object.e_id].mmState.charges[atom.index - 1])
+            return '%4.3f' % charge
+        elif content == 'residue_name':
+            return atom.residue.name
+        elif content == 'residue_index':
+            return str(atom.residue.index)
+        elif content == 'chain':
+            return str(atom.chain.name)
+        else:
+            # 'name' (default) and any unrecognized value
+            return atom.name
+    except Exception:
+        return atom.name or ''
 
 
 class Representation:
@@ -1748,7 +1783,17 @@ class LabelRepresentation:
         self.vm_object = vismol_object
         self.vm_session = vismol_object.vm_session
         self.vm_glcore = vismol_glcore
-        self.vm_font = VismolFont(color=color)
+        # Font family/size for THIS representation (atom index, MM charge,
+        # residue name/index, chain, ...) are customizable independently
+        # from the picking/distance labels, via the Preferences window
+        # ("Atom Labels (glArea)"), and persisted in gl_parameters under
+        # 'atom_label_font_file'/'atom_label_font_size'.
+        gp = self.vm_session.vm_config.gl_parameters
+        _font_file = gp.get("atom_label_font_file", DEFAULT_FONT_FILE)
+        _font_size = gp.get("atom_label_font_size", DEFAULT_FONT_SIZE)
+        self.vm_font = VismolFont(font_file=resolve_font_path(_font_file),
+                                   char_width=_font_size, char_height=_font_size,
+                                   color=color)
         self.indexes = indexes
         self.labels = labels
         self.active = True
@@ -1765,7 +1810,6 @@ class LabelRepresentation:
             return False
 
         if self.vm_font.vao is None:
-            self.vm_font.set_dimensions (width = 0.15, height= 0.18 )
             #self.vm_font.set_color(r = 255, g = 0, b =0)
             self.vm_font.make_freetype_font()
             #self.vm_font.make_freetype_texture(self.core_shader_programs["freetype"])
@@ -1786,7 +1830,11 @@ class LabelRepresentation:
             
             
             
-            text = atom.label_text#+'/'+str(atom.index)
+            # Falls back to the atom name if no explicit label_text was
+            # set (e.g. via the "Show atom index/charge/residue.../" menu
+            # in eSession.py), and to an empty string as a last resort so
+            # this never raises on a None text.
+            text = atom.label_text or atom.name or ''
             #text = atom.residue.name +'/'+ atom.name+'/'+str(atom.index)
             
             

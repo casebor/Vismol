@@ -29,9 +29,41 @@ import ctypes
 from OpenGL import GL
 import os
 import vismol.libgl.glaxis as glaxis
-fontpath = os.path.split(glaxis.__file__)[:-1]
+_fontdir = os.path.split(glaxis.__file__)[:-1]
+FONTS_DIR = os.path.join(*_fontdir, "fonts")
 #fontpath = os.path.join(*fontpath, "fonts", "VeraMono.ttf")
-fontpath = os.path.join(*fontpath, "fonts", "Amiko-SemiBold.ttf")
+fontpath = os.path.join(FONTS_DIR, "Amiko-SemiBold.ttf")
+DEFAULT_FONT_FILE = "Amiko-SemiBold.ttf"
+DEFAULT_FONT_SIZE = 0.35
+
+
+def list_available_fonts():
+    """ Returns a sorted list of the .ttf font filenames bundled with
+        VisMol (found in the libgl/fonts folder), e.g.
+        ['Amiko-Bold.ttf', 'Amiko-Regular.ttf', ...].
+    """
+    try:
+        fonts = [f for f in os.listdir(FONTS_DIR) if f.lower().endswith(".ttf")]
+    except OSError:
+        fonts = [DEFAULT_FONT_FILE]
+    return sorted(fonts)
+
+
+def resolve_font_path(font_name_or_path):
+    """ Resolves a font "name" (as stored in the preferences, e.g.
+        'Amiko-SemiBold.ttf') to a full path. If a full/relative path is
+        already given (and exists) it is returned unchanged. Falls back to
+        the default bundled font when the requested one can't be found.
+    """
+    if not font_name_or_path:
+        return fontpath
+    if os.path.isabs(font_name_or_path) and os.path.isfile(font_name_or_path):
+        return font_name_or_path
+    candidate = os.path.join(FONTS_DIR, os.path.basename(font_name_or_path))
+    if os.path.isfile(candidate):
+        return candidate
+    return fontpath
+
 
 class VismolFont():
     """ VismolFont stores the data created using the freetype python binding
@@ -184,6 +216,24 @@ class VismolFont():
         self.char_width  =  width
         self.char_height =  height
         self.offset = np.array([ width/2.0,  height/2.0], dtype=np.float32)
+    
+    def apply_settings(self, font_file=None, size=None):
+        """ Updates the font file and/or the character size (width/height
+            are kept equal, driven by a single "size" value) and marks the
+            OpenGL texture/VAO for regeneration on the next draw call
+            (vao=None). Used by the Preferences window to let the user
+            change the font family and font size used for every label
+            drawn in the glArea (atom labels, picking labels, distance
+            labels).
+        """
+        if font_file is not None:
+            self.font_file = resolve_font_path(font_file)
+        if size is not None:
+            self.set_dimensions(size, size)
+        # Force the texture/VAO/font bitmap to be rebuilt on next use
+        self.vao = None
+        self.font_buffer = None
+        self.texture_id = None
     
     def set_color (self, r = 1.0, g = 1.0, b = 1.0):      
         self.color = np.array([r,g,b], dtype=np.float32)
