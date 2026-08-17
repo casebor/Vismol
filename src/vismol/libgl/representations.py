@@ -1794,6 +1794,15 @@ class LabelRepresentation:
         self.vm_font = VismolFont(font_file=resolve_font_path(_font_file),
                                    char_width=_font_size, char_height=_font_size,
                                    color=color)
+        # See VismolFont.zoom_sensitivity: 0.0 (default) keeps atom
+        # labels a constant size on screen regardless of zoom; 1.0
+        # restores the old behavior of shrinking/growing with camera
+        # distance like the rest of the 3D scene. Shared by ALL glArea
+        # labels via the single "Labels scale with zoom" checkbox on the
+        # Viewer > General tab in Preferences (picking and distance
+        # labels read the same 'labels_zoom_sensitivity' key -- see
+        # VismolGLCore.__init__).
+        self.vm_font.zoom_sensitivity = gp.get("labels_zoom_sensitivity", 1.0)
         self.indexes = indexes
         self.labels = labels
         self.active = True
@@ -1808,83 +1817,27 @@ class LabelRepresentation:
         """ Function doc """
         if self.vm_glcore.dragging:
             return False
-
-        if self.vm_font.vao is None:
-            #self.vm_font.set_color(r = 255, g = 0, b =0)
-            self.vm_font.make_freetype_font()
-            #self.vm_font.make_freetype_texture(self.core_shader_programs["freetype"])
-            self.vm_font.make_freetype_texture(self.vm_glcore.core_shader_programs["freetype"])
         
-        
-        
-        number = 1
-        self.chars = 0
-        xyz_pos = []
-        uv_coords = []
-        
-        
-        #for vm_object in self.vm_session.vm_objects_dic.values():
-        #for index, atom in vm_object.atoms.items():
+        entries = []
         for index in self.indexes:
             atom = self.vm_object.atoms[index]
-            
-            
-            
             # Falls back to the atom name if no explicit label_text was
             # set (e.g. via the "Show atom index/charge/residue.../" menu
             # in eSession.py), and to an empty string as a last resort so
             # this never raises on a None text.
             text = atom.label_text or atom.name or ''
-            #text = atom.residue.name +'/'+ atom.name+'/'+str(atom.index)
-            
-            
-            
+            if not text:
+                continue
             frame = self.vm_glcore._get_vismol_object_frame(atom.vm_object)
-            x, y, z = atom.coords(frame)
-            point = np.array([x, y, z, 1], dtype=np.float32)
-            point = np.dot(point, self.vm_glcore.model_mat)
-            GL.glBindTexture(GL.GL_TEXTURE_2D, self.vm_font.texture_id)
-            for i, c in enumerate(text):
-                self.chars += 1
-                c_id = ord(c)
-                x = c_id %  16      #  16  
-                y = c_id // 16 - 2  #  16 - 2
-                xyz_pos.append((point[0] + i * self.vm_font.char_width) - (len(text)*0.1)/2)
-                xyz_pos.append(point[1])
-                xyz_pos.append(point[2])
-                uv_coords.append(x * self.vm_font.text_u)
-                uv_coords.append(y * self.vm_font.text_v)
-                uv_coords.append((x + 1) * self.vm_font.text_u)
-                uv_coords.append((y + 1) * self.vm_font.text_v)
-
-
-
-        xyz_pos = np.array(xyz_pos, dtype=np.float32)
-        uv_coords = np.array(uv_coords, dtype=np.float32)
-
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.coord_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, xyz_pos.itemsize * len(xyz_pos),
-                        xyz_pos, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.text_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, uv_coords.itemsize * len(uv_coords),
-                        uv_coords, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_BLEND)
-        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-        GL.glUseProgram(self.vm_glcore.core_shader_programs["freetype"])
-        self.do_once = False
+            point = atom.coords(frame)
+            # x_shift = -len(text)/2.0 centers the label on the atom
+            # instead of anchoring its first character there. Baked
+            # per-entry (not into a shared string_shift uniform)
+            # because this single draw call mixes many atoms with
+            # DIFFERENT label lengths -- see _draw_text_labels().
+            entries.append((text, point, -len(text) / 2.0))
         
-        self.vm_font.load_matrices(self.vm_glcore.core_shader_programs["freetype"],
-                                   self.vm_glcore.glcamera.view_matrix,
-                                   self.vm_glcore.glcamera.projection_matrix)
-        self.vm_font.load_font_params(self.vm_glcore.core_shader_programs["freetype"])
-        
-        GL.glBindVertexArray(self.vm_font.vao)
-        GL.glDrawArrays(GL.GL_POINTS, 0, self.chars)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glBindVertexArray(0)
-        GL.glUseProgram(0)
+        self.vm_glcore._draw_text_labels(self.vm_font, entries)
 
 
     def draw_background_sel_representation(self, line_width_factor=5):

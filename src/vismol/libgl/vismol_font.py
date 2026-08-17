@@ -35,6 +35,23 @@ FONTS_DIR = os.path.join(*_fontdir, "fonts")
 fontpath = os.path.join(FONTS_DIR, "Amiko-SemiBold.ttf")
 DEFAULT_FONT_FILE = "Amiko-SemiBold.ttf"
 DEFAULT_FONT_SIZE = 0.35
+# [EN] The freetype geometry shader now scales glyph size/advance by the
+# label's actual distance from the camera, so that labels keep a
+# CONSTANT size on screen regardless of zoom by default (see the
+# comment block in shaders/vm_freetype.py for the full reasoning, and
+# VismolFont.zoom_sensitivity below to make a font's labels respond to
+# zoom again, partially or fully). That distance-scaling needs to be
+# calibrated against a reference distance, or every "char_width"/
+# "char_height" value that used to mean "this many world units" (tuned
+# by eye, including DEFAULT_FONT_SIZE above, back when label size was
+# NOT distance-scaled) would suddenly render at the wrong size at the
+# app's typical viewing distance. LABEL_DEPTH_REFERENCE is that
+# calibration distance (sent to the shader as the "depth_ref" uniform):
+# it matches GLCamera's default starting position (pos=(0, 0, 10), i.e.
+# 10 world units from the origin -- see glcamera.py), so a freshly
+# opened glArea looks the same size as before, no matter what
+# zoom_sensitivity is set to.
+LABEL_DEPTH_REFERENCE = 10.0
 
 
 def list_available_fonts():
@@ -92,6 +109,29 @@ class VismolFont():
         self.vao = None
         self.text_vbo = None
         self.coord_vbo = None
+        # [EN] Per-character slot index (0, 1, 2, ...), consumed by the
+        # geometry shader to compute the horizontal advance between
+        # glyphs of the same string in screen-aligned (view) space --
+        # see the comment in shaders/vm_freetype.py for why this
+        # replaced baking the advance into world-space coordinates on
+        # the CPU.
+        self.char_idx_vbo = None
+        # [EN] Small constant (x, y) nudge applied to an entire string,
+        # in character-size units, e.g. to shift a label so it doesn't
+        # sit exactly on top of the atom/dot it names. Consumed by the
+        # "string_shift" uniform. Callers set this right before drawing
+        # (see VismolGLCore._draw_text_labels).
+        self.string_shift = np.array([0.0, 0.0], dtype=np.float32)
+        # [EN] How sensitive THIS font's labels are to camera zoom/dolly,
+        # from 0.0 (constant size on screen, regardless of distance --
+        # the default, matching the billboard refactor) to 1.0 (natural
+        # perspective size, i.e. the label behaves like a fixed-size
+        # object in world space and shrinks/grows with camera distance,
+        # same as before that refactor). See depth_ref/zoom_sensitivity
+        # in shaders/vm_freetype.py for the exact blend. Different
+        # VismolFont instances (picking labels vs. distance labels vs.
+        # atom labels) can each set their own value.
+        self.zoom_sensitivity = 0.0
     
     def make_freetype_font(self):
         """ Function doc
@@ -151,14 +191,30 @@ class VismolFont():
         GL.glEnableVertexAttribArray(gl_texture)
         GL.glVertexAttribPointer(gl_texture, 4, GL.GL_FLOAT, GL.GL_FALSE, 4*uv_pos.itemsize, ctypes.c_void_p(0))
         
+        # [EN] Third attribute: the character's slot index inside its
+        # string (float, one value per point/glyph). See the class-level
+        # comment on char_idx_vbo and the geometry shader for why this
+        # exists -- it lets the advance between glyphs be computed in
+        # screen-aligned space on the GPU instead of world space on the
+        # CPU.
+        char_idx = np.zeros(1, dtype=np.float32)
+        char_idx_vbo = GL.glGenBuffers(1)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, char_idx_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, char_idx.itemsize*len(char_idx), char_idx, GL.GL_DYNAMIC_DRAW)
+        gl_char_idx = GL.glGetAttribLocation(program, "vert_char_idx")
+        GL.glEnableVertexAttribArray(gl_char_idx)
+        GL.glVertexAttribPointer(gl_char_idx, 1, GL.GL_FLOAT, GL.GL_FALSE, char_idx.itemsize, ctypes.c_void_p(0))
+        
         GL.glBindVertexArray(0)
         GL.glDisableVertexAttribArray(gl_coord)
         GL.glDisableVertexAttribArray(gl_texture)
+        GL.glDisableVertexAttribArray(gl_char_idx)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         
         self.vao = vao
         self.text_vbo = text_vbo
         self.coord_vbo = coord_vbo
+        self.char_idx_vbo = char_idx_vbo
     
     def _get_uniform_location(self, program, name):
         """ Cached wrapper around glGetUniformLocation. Uniform locations
@@ -184,12 +240,26 @@ class VismolFont():
     def load_font_params(self, program):
         """ Loads the uniform parameters for the OpenGL program, such as the
             offset coordinates (X,Y) to calculate the quad and the color of
-            the font.
+            the font. Also loads char_advance (the per-glyph horizontal
+            step within a string), string_shift (a small constant
+            per-string nudge), depth_ref (the calibration distance) and
+            zoom_sensitivity (how much this font's size responds to
+            camera distance) -- all consumed by the geometry shader to
+            build camera-facing labels. See the comments in
+            shaders/vm_freetype.py for the full reasoning.
         """
         offset = self._get_uniform_location(program, "offset")
         GL.glUniform2fv(offset, 1, self.offset)
         color = self._get_uniform_location(program, "text_color")
         GL.glUniform4fv(color, 1, self.color)
+        char_advance = self._get_uniform_location(program, "char_advance")
+        GL.glUniform1f(char_advance, self.char_width)
+        string_shift = self._get_uniform_location(program, "string_shift")
+        GL.glUniform2fv(string_shift, 1, self.string_shift)
+        depth_ref = self._get_uniform_location(program, "depth_ref")
+        GL.glUniform1f(depth_ref, LABEL_DEPTH_REFERENCE)
+        zoom_sensitivity = self._get_uniform_location(program, "zoom_sensitivity")
+        GL.glUniform1f(zoom_sensitivity, self.zoom_sensitivity)
         return True
     
     def print_all(self):

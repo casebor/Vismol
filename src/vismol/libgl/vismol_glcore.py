@@ -154,21 +154,41 @@ class VismolGLCore:
                                  np.array([0,0,10], dtype=np.float32),
                                  self.zero_reference_point)
         
-        # Font family/size for the labels drawn in the glArea (atom labels,
-        # picking labels, distance labels) can be customized by the user
-        # in the Preferences window ("Labels Font (glArea)"). They are
-        # persisted in gl_parameters under 'label_font_file'/'label_font_size'.
+        # Font family/size for the labels drawn in the glArea can be
+        # customized by the user in the Preferences window ("Labels Font
+        # (glArea)"). 'label_font_file'/'label_font_size' drive the
+        # PICKING labels (#1 #2 #3 #4, self.vm_font below) -- this is the
+        # original preference key, kept as-is for backward compatibility.
+        # Distance labels (self.vm_font_dist) now have their OWN,
+        # independent size via 'pk_dist_label_font_size' (falling back to
+        # the picking size when unset), but share the SAME font family as
+        # picking labels (one combo box in Preferences).
+        #
+        # ALL glArea labels (picking, distance, atom labels) share a
+        # single "zoom_sensitivity" (0.0..1.0) set on the Viewer >
+        # General tab in Preferences ('labels_zoom_sensitivity'): 0.0
+        # keeps every label a constant size on screen no matter how far
+        # the camera dollies in/out (the default, see
+        # VismolFont.zoom_sensitivity); 1.0 restores the pre-billboard-
+        # refactor behavior where a label's on-screen size shrinks as the
+        # camera moves away and grows as it gets closer, exactly like the
+        # rest of the 3D scene. Values in between blend the two.
         _label_font_file = self.vm_config.gl_parameters.get("label_font_file", DEFAULT_FONT_FILE)
         _label_font_size = self.vm_config.gl_parameters.get("label_font_size", DEFAULT_FONT_SIZE)
         _label_font_path = resolve_font_path(_label_font_file)
+        _labels_zoom_sensitivity = self.vm_config.gl_parameters.get("labels_zoom_sensitivity", 1.0)
+        
+        _dist_font_size = self.vm_config.gl_parameters.get("pk_dist_label_font_size", _label_font_size)
         
         self.vm_font        = VismolFont(font_file=_label_font_path, char_width=_label_font_size,
                                           char_height=_label_font_size, color=[1, 1, 1, 1])
+        self.vm_font.zoom_sensitivity = _labels_zoom_sensitivity
         self.vm_font_static = VismolFont(font_file=_label_font_path, char_width=_label_font_size,
                                           char_height=_label_font_size, color=[1, 1, 1, 1])
         self.vm_font_dist   = VismolFont(char_res=264, font_file=_label_font_path,
-                                          char_width=_label_font_size, char_height=_label_font_size,
+                                          char_width=_dist_font_size, char_height=_dist_font_size,
                                           color = [1, 1, 1, 1])
+        self.vm_font_dist.zoom_sensitivity = _labels_zoom_sensitivity
         
         self.axis = GLAxis(vm_glcore = self)
         self.selection_box = SelectionBox()
@@ -2261,252 +2281,182 @@ class VismolGLCore:
         if changed:
             GL.glUniform3fv(loc, 1, self.bckgrnd_color[:3])
     
-    def _draw_labels(self):
-        if self.vm_font.vao is None:
-            self.vm_font.make_freetype_font()
-            #self.vm_font.make_freetype_font(self.vm_session.vm_config.gl_parameters["picking_dots_color"])
-            self.vm_font.make_freetype_texture(self.core_shader_programs["freetype"])
-        number = 1
-        self.chars = 0
+    def _draw_text_labels(self, vm_font, entries, string_shift=(0.0, 0.0)):
+        """ [EN] Unified label/text drawing routine, shared by
+            _draw_labels(), _draw_distance_labels(), _draw_picking_label()
+            and representations.LabelRepresentation.draw_representation()
+            (the actual, active "Atom Labels" feature) -- previously each
+            of those duplicated almost the exact same "build
+            xyz_pos/uv_coords -> upload VBOs -> set GL state -> draw"
+            sequence.
+
+            More importantly, this is also where the billboard fix
+            lives: earlier, each caller baked the per-character
+            horizontal advance directly into the WORLD-space X
+            coordinate on the CPU (`point[0] + i * char_width`), which
+            only looked correct when the camera happened to be looking
+            straight down -Z -- any other camera orientation sheared
+            the text, because the advance direction was the world X
+            axis, not the camera's screen-right direction. Here we
+            instead upload the SAME anchor point (in world/model space)
+            for every character of a string, plus that character's slot
+            index (0, 1, 2, ...) as a separate per-vertex attribute.
+            The geometry shader (shaders/vm_freetype.py) transforms the
+            anchor to view space ONCE and then computes the advance
+            along the view-space X/Y axes -- which are always the
+            camera's screen-right/screen-up, regardless of camera
+            rotation -- and scales both the advance and the glyph size
+            by the point's distance from the camera (see
+            VismolFont.zoom_sensitivity for how much/little that
+            scaling actually happens).
+
+            Input parameters:
+                vm_font -- the VismolFont instance to draw with (already
+                           carrying color/size/zoom_sensitivity/etc).
+                entries -- iterable of (text, (x, y, z)) or
+                           (text, (x, y, z), x_shift) tuples, where
+                           (x, y, z) is the *world/model-space* anchor
+                           point for that string (e.g. an atom's
+                           coordinates, or a distance label's midpoint),
+                           and the optional x_shift is a PER-STRING
+                           horizontal nudge in character-size units
+                           (e.g. -len(text)/2.0 to center a label of
+                           that length on its anchor point). This is
+                           baked directly into that string's char_idx
+                           values, so -- unlike string_shift below --
+                           different entries in the SAME call can each
+                           have a different x_shift (needed for Atom
+                           Labels, where many differently-sized strings
+                           are drawn together in one glDrawArrays call).
+                string_shift -- small constant (x, y) nudge applied to
+                                EVERY string in this call alike, in
+                                character-size units (e.g. to offset a
+                                picking label like "#1" away from the
+                                atom it names). Use this instead of a
+                                per-entry x_shift when the nudge doesn't
+                                depend on the text itself.
+
+            Returns the number of glyphs (GL_POINTS) drawn.
+        """
+        if vm_font.vao is None:
+            vm_font.make_freetype_font()
+            vm_font.make_freetype_texture(self.core_shader_programs["freetype"])
+        
         xyz_pos = []
         uv_coords = []
+        char_idx = []
         
-        self.do_once = True
+        GL.glBindTexture(GL.GL_TEXTURE_2D, vm_font.texture_id)
+        for entry in entries:
+            if len(entry) == 3:
+                text, (x, y, z), x_shift = entry
+            else:
+                text, (x, y, z) = entry
+                x_shift = 0.0
+            point = np.array([x, y, z, 1], dtype=np.float32)
+            point = np.dot(point, self.model_mat)
+            for i, c in enumerate(text):
+                c_id = ord(c)
+                cx = c_id % 16
+                cy = c_id // 16 - 2
+                # Every glyph of this string shares the SAME anchor --
+                # the advance (i + x_shift) is applied later, on the
+                # GPU, in screen-aligned space (see the geometry
+                # shader).
+                xyz_pos.append(point[0])
+                xyz_pos.append(point[1])
+                xyz_pos.append(point[2])
+                uv_coords.append(cx * vm_font.text_u)
+                uv_coords.append(cy * vm_font.text_v)
+                uv_coords.append((cx + 1) * vm_font.text_u)
+                uv_coords.append((cy + 1) * vm_font.text_v)
+                char_idx.append(float(i) + x_shift)
         
-        if self.do_once:
-            for vm_object in self.vm_session.vm_objects_dic.values():
-                for index, atom in vm_object.atoms.items():
-                    text = atom.residue.name +'/'+ atom.name+'/'+str(atom.index)
-                    frame = self._get_vismol_object_frame(atom.vm_object)
-                    x, y, z = atom.coords(frame)
-                    point = np.array([x, y, z, 1], dtype=np.float32)
-                    point = np.dot(point, self.model_mat)
-                    GL.glBindTexture(GL.GL_TEXTURE_2D, self.vm_font.texture_id)
-                    for i, c in enumerate(text):
-                        self.chars += 1
-                        c_id = ord(c)
-                        x = c_id % 16
-                        y = c_id // 16 - 2
-                        xyz_pos.append(point[0] + i * self.vm_font.char_width)
-                        xyz_pos.append(point[1])
-                        xyz_pos.append(point[2])
-                        uv_coords.append(x * self.vm_font.text_u)
-                        uv_coords.append(y * self.vm_font.text_v)
-                        uv_coords.append((x + 1) * self.vm_font.text_u)
-                        uv_coords.append((y + 1) * self.vm_font.text_v)
-                number += 1
-            xyz_pos = np.array(xyz_pos, dtype=np.float32)
-            uv_coords = np.array(uv_coords, dtype=np.float32)
-            
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.coord_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, xyz_pos.itemsize * len(xyz_pos),
-                            xyz_pos, GL.GL_DYNAMIC_DRAW)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.text_vbo)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, uv_coords.itemsize * len(uv_coords),
-                            uv_coords, GL.GL_DYNAMIC_DRAW)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-            GL.glDisable(GL.GL_DEPTH_TEST)
-            GL.glEnable(GL.GL_BLEND)
-            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-            GL.glUseProgram(self.core_shader_programs["freetype"])
-            self.do_once = False
-        
-        self.vm_font.load_matrices(self.core_shader_programs["freetype"],
-                                   self.glcamera.view_matrix,
-                                   self.glcamera.projection_matrix)
-        self.vm_font.load_font_params(self.core_shader_programs["freetype"])
-        
-        GL.glBindVertexArray(self.vm_font.vao)
-        GL.glDrawArrays(GL.GL_POINTS, 0, self.chars)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glBindVertexArray(0)
-        GL.glUseProgram(0)
-
-    def _draw_distance_labels(self, vm_object):
-        if self.vm_font_dist.vao is None:
-            self.vm_font_dist.color = np.array(self.vm_session.vm_config.gl_parameters["pk_dist_label_color"], dtype=np.float32)
-            self.vm_font_dist.make_freetype_font()
-            self.vm_font_dist.make_freetype_texture(self.core_shader_programs["freetype"])
-        
-        number = 1.5
-        chars = 0
-        xyz_pos = []
-        uv_coords = []
-        self.vm_font_dist.char_res    =15
-        #self.vm_font_dist.char_width  = 0.15
-        #self.vm_font_dist.char_height = 0.15
-        text =  '{:.2f}'.format(vm_object.dist)
-        #frame = self._get_vismol_object_frame(atom.vm_object)
-        #x, y, z = atom.coords(frame)
-        x, y, z = vm_object.midpoint[0],vm_object.midpoint[1],vm_object.midpoint[2]
-
-        point = np.array([x, y, z, 1], dtype=np.float32)
-        point = np.dot(point, self.model_mat)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self.vm_font_dist.texture_id)
-        for i, c in enumerate(text):
-            chars += 1
-            c_id = ord(c)
-            x = c_id % 16
-            y = c_id // 16 - 2
-            xyz_pos.append(point[0] + i * self.vm_font_dist.char_width -0.2) # -0.2 is shift factor to drag the label to center  
-            xyz_pos.append(point[1])
-            xyz_pos.append(point[2])
-            uv_coords.append(x * self.vm_font_dist.text_u)
-            uv_coords.append(y * self.vm_font_dist.text_v)
-            uv_coords.append((x + 1) * self.vm_font_dist.text_u)
-            uv_coords.append((y + 1) * self.vm_font_dist.text_v)
+        chars = len(char_idx)
+        if chars == 0:
+            return 0
         
         xyz_pos = np.array(xyz_pos, dtype=np.float32)
         uv_coords = np.array(uv_coords, dtype=np.float32)
+        char_idx = np.array(char_idx, dtype=np.float32)
         
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font_dist.coord_vbo)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vm_font.coord_vbo)
         GL.glBufferData(GL.GL_ARRAY_BUFFER, xyz_pos.itemsize * len(xyz_pos),
                         xyz_pos, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font_dist.text_vbo)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vm_font.text_vbo)
         GL.glBufferData(GL.GL_ARRAY_BUFFER, uv_coords.itemsize * len(uv_coords),
                         uv_coords, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vm_font.char_idx_vbo)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, char_idx.itemsize * len(char_idx),
+                        char_idx, GL.GL_DYNAMIC_DRAW)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_BLEND)
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
         GL.glUseProgram(self.core_shader_programs["freetype"])
         
-        self.vm_font_dist.load_matrices(self.core_shader_programs["freetype"],
-                                   self.glcamera.view_matrix,
-                                   self.glcamera.projection_matrix)
-        self.vm_font_dist.load_font_params(self.core_shader_programs["freetype"])
+        vm_font.string_shift = np.array(string_shift, dtype=np.float32)
+        vm_font.load_matrices(self.core_shader_programs["freetype"],
+                              self.glcamera.view_matrix,
+                              self.glcamera.projection_matrix)
+        vm_font.load_font_params(self.core_shader_programs["freetype"])
         
-        GL.glBindVertexArray(self.vm_font_dist.vao)
+        GL.glBindVertexArray(vm_font.vao)
         GL.glDrawArrays(GL.GL_POINTS, 0, chars)
         GL.glDisable(GL.GL_BLEND)
         GL.glBindVertexArray(0)
         GL.glUseProgram(0)
-        
-        '''
-        if self.vm_font_dist_static.vao is None:
-            self.vm_font_dist_static.make_freetype_font()
-            self.vm_font_dist_static.make_freetype_texture(self.core_shader_programs["freetype"])
-        
-        number     = 1
-        self.chars = 0
-        point      = vm_object.midpoint
-        xyz_pos    = []
-        uv_coords  = []
-        
-        
-        
-        self.do_once = True
-        
-        #if self.do_once:
+        return chars
 
-        text = "distance: {}".format(0.0) 
-        point = np.array([point[0],point[1],point[2], 1 ], dtype=np.float32)
-        #point = np.dot(point, self.model_mat)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self.vm_font_dist.texture_id)
-        for i, c in enumerate(text):
-            self.chars += 1
-            c_id = ord(c)
-            x = c_id % 16
-            y = c_id // 16 - 2
-            xyz_pos.append(point[0] + i * self.vm_font_dist.char_width)
-            xyz_pos.append(point[1])
-            xyz_pos.append(point[2])
-            uv_coords.append(x * self.vm_font_dist.text_u)
-            uv_coords.append(y * self.vm_font_dist.text_v)
-            uv_coords.append((x + 1) * self.vm_font_dist.text_u)
-            uv_coords.append((y + 1) * self.vm_font_dist.text_v)
-            number += 1
-        xyz_pos = np.array(xyz_pos, dtype=np.float32)
-        uv_coords = np.array(uv_coords, dtype=np.float32)
-        
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font_dist.coord_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, xyz_pos.itemsize * len(xyz_pos),
-                        xyz_pos, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font_dist.text_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, uv_coords.itemsize * len(uv_coords),
-                        uv_coords, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_BLEND)
-        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-        GL.glUseProgram(self.core_shader_programs["freetype"])
-        
-        self.vm_font_dist.load_matrices(self.core_shader_programs["freetype"],
-                                   self.glcamera.view_matrix,
-                                   self.glcamera.projection_matrix)
-        self.vm_font_dist.load_font_params(self.core_shader_programs["freetype"])
-        
-        GL.glBindVertexArray(self.vm_font_dist.vao)
-        GL.glDrawArrays(GL.GL_POINTS, 0, self.chars)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glBindVertexArray(0)
-        GL.glUseProgram(0)
-        #print('aqui')
-        '''
+    def _draw_labels(self):
+        """ Draws one "residue/atom_name/index" label per atom of every
+            vm_object in the session. (Not currently wired into
+            render() -- kept working/consistent with the other two
+            label drawers in case it gets turned back on, but nothing
+            in this refactor changes whether it's called.)
+        """
+        entries = []
+        for vm_object in self.vm_session.vm_objects_dic.values():
+            for index, atom in vm_object.atoms.items():
+                text = atom.residue.name + '/' + atom.name + '/' + str(atom.index)
+                frame = self._get_vismol_object_frame(atom.vm_object)
+                entries.append((text, atom.coords(frame)))
+        self._draw_text_labels(self.vm_font, entries)
+
+    def _draw_distance_labels(self, vm_object):
+        """ Draws the numeric distance label ("1.23") at the midpoint of
+            a picking distance/dash line.
+        """
+        if self.vm_font_dist.vao is None:
+            self.vm_font_dist.color = np.array(self.vm_session.vm_config.gl_parameters["pk_dist_label_color"], dtype=np.float32)
+        self.vm_font_dist.char_res = 15
+        text = '{:.2f}'.format(vm_object.dist)
+        midpoint = (vm_object.midpoint[0], vm_object.midpoint[1], vm_object.midpoint[2])
+        # x_shift = -len(text)/2.0 centers the string on the midpoint
+        # (half the string's width to the left) instead of anchoring
+        # its first character there -- replaces the old "-0.2"
+        # world-space fudge factor, now applied in screen-aligned space
+        # by the shader so it no longer skews with camera rotation.
+        self._draw_text_labels(self.vm_font_dist, [(text, midpoint, -len(text) / 2.0)])
     
     def _draw_picking_label(self):
         """ This function draws the labels of the atoms selected by the
             function picking #1 #2 #3 #4
         """
         if self.vm_font.vao is None:
-            #self.vm_font.make_freetype_font(color = self.vm_session.vm_config.gl_parameters["picking_dots_color"])
             self.vm_font.color = np.array(self.vm_session.vm_config.gl_parameters["pk_label_color"], dtype=np.float32)
-            self.vm_font.make_freetype_font()
-            self.vm_font.make_freetype_texture(self.core_shader_programs["freetype"])
         
-        number = 1
-        chars = 0
-        xyz_pos = []
-        uv_coords = []
-        
-        for atom in self.vm_session.picking_selections.picking_selections_list:
+        entries = []
+        for number, atom in enumerate(self.vm_session.picking_selections.picking_selections_list, start=1):
             if atom:
                 text = "#" + str(number)
                 frame = self._get_vismol_object_frame(atom.vm_object)
-                x, y, z = atom.coords(frame)
-                
-
-                point = np.array([x, y, z, 1], dtype=np.float32)
-                point = np.dot(point, self.model_mat)
-                GL.glBindTexture(GL.GL_TEXTURE_2D, self.vm_font.texture_id)
-                for i, c in enumerate(text):
-                    chars += 1
-                    c_id = ord(c)
-                    x = c_id % 16
-                    y = c_id // 16 - 2
-                    xyz_pos.append(point[0] + i * self.vm_font.char_width -0.075)
-                    xyz_pos.append(point[1]-0.05)
-                    xyz_pos.append(point[2])
-                    uv_coords.append(x * self.vm_font.text_u)
-                    uv_coords.append(y * self.vm_font.text_v)
-                    uv_coords.append((x + 1) * self.vm_font.text_u)
-                    uv_coords.append((y + 1) * self.vm_font.text_v)
-            number += 1
-        xyz_pos = np.array(xyz_pos, dtype=np.float32)
-        uv_coords = np.array(uv_coords, dtype=np.float32)
-        
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.coord_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, xyz_pos.itemsize * len(xyz_pos),
-                        xyz_pos, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vm_font.text_vbo)
-        GL.glBufferData(GL.GL_ARRAY_BUFFER, uv_coords.itemsize * len(uv_coords),
-                        uv_coords, GL.GL_DYNAMIC_DRAW)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_BLEND)
-        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-        GL.glUseProgram(self.core_shader_programs["freetype"])
-        
-        self.vm_font.load_matrices(self.core_shader_programs["freetype"],
-                                   self.glcamera.view_matrix,
-                                   self.glcamera.projection_matrix)
-        self.vm_font.load_font_params(self.core_shader_programs["freetype"])
-        
-        GL.glBindVertexArray(self.vm_font.vao)
-        GL.glDrawArrays(GL.GL_POINTS, 0, chars)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glBindVertexArray(0)
-        GL.glUseProgram(0)
+                entries.append((text, atom.coords(frame)))
+        # Small constant nudge (in char-size units) so the "#N" label
+        # doesn't sit exactly on top of the picking sphere/dot -- same
+        # role as the old "-0.075"/"-0.05" world-space offsets, now
+        # applied in screen-aligned space.
+        self._draw_text_labels(self.vm_font, entries, string_shift=(-0.2, -0.15))
         
         '''
         atomlist = self.vm_session.picking_selections.picking_selections_list
