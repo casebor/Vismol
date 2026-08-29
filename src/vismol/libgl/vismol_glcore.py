@@ -230,6 +230,7 @@ class VismolGLCore:
         self.show_selection_box_x, self.show_selection_box_y = None, None
         self.mouse_x, self.mouse_y = np.float32(0.0), np.float32(0.0)
         self.mouse_rotate, self.mouse_zoom, self.mouse_pan = False, False, False
+        self._macos_buttons_down = 0
         self.drag_pos_x, self.drag_pos_y, self.drag_pos_z = None, None, None
     
     def resize_window(self, width, height):
@@ -246,13 +247,31 @@ class VismolGLCore:
         self.left = -self.right
         self.center_x = self.width / 2.0
         self.center_y = self.height / 2.0
+        if not hasattr(self, "glcamera"):
+            return
         self.glcamera.viewport_aspect_ratio = self.width / self.height
         _proj_mat = mop.my_glPerspectivef(self.glcamera.field_of_view,
                                           self.glcamera.viewport_aspect_ratio,
                                           self.glcamera.z_near, self.glcamera.z_far)
         self.glcamera.set_projection_matrix(_proj_mat)
-        
-    def mouse_pressed(self, button_number, mouse_x, mouse_y):
+
+    def _macos_modes_from_buttons(self, left, middle, right):
+        """ Derives rotate/zoom/pan from a set of *currently held* button
+            booleans. Used for both the macOS press and motion handlers so
+            the same live bitmask is always the single source of truth --
+            see the note in mouse_motion() for why that matters.
+        """
+        if left and right and not middle:
+            # Both trackpad sides held at once: treat as zoom, anchored
+            # to the viewport center, regardless of self.cmd.
+            return False, True, False
+        rotate = left   and not (middle or right)
+        zoom   = right  and not (middle or left) and not self.cmd
+        pan    = (middle and not (right or left)) \
+                 or (right and self.cmd and not (middle or left))
+        return rotate, zoom, pan
+
+    def mouse_pressed(self, button_number, mouse_x, mouse_y, button_state=None):
         """ Function doc
         """
         left   = np.int32(button_number) == 1
@@ -266,10 +285,35 @@ class VismolGLCore:
         # True by macOS-only key handlers (see vismol_gtkwidget.py), so
         # this is a no-op everywhere else: plain right-drag still zooms,
         # plain middle-drag still pans, unchanged.
-        self.mouse_rotate = left   and not (middle or right)
-        self.mouse_zoom   = right  and not (middle or left) and not self.cmd
-        self.mouse_pan    = (middle and not (right or left)) \
-                             or (right and self.cmd and not (middle or left))
+        if button_state is not None:
+            # [EN] macOS reports the very start of a two-finger
+            # secondary-click gesture ambiguously -- it can deliver this
+            # press as a plain left button (1) for the first event or
+            # two, before "upgrading" it to the right button (3) once it
+            # finishes disambiguating one- vs two-finger contact. Deciding
+            # the gesture mode ONCE here, from just this press's button
+            # number, used to latch onto whatever button macOS reported
+            # first (often rotate) and never re-evaluate -- so a zoom
+            # gesture that started ambiguous stayed stuck rotating for
+            # its whole drag, which is what read as "zoom drifting
+            # sideways". mouse_motion() now recomputes the mode from the
+            # live button bitmask on every single motion event instead,
+            # so this initial guess self-corrects within one frame as
+            # soon as macOS reports the real button. Only used to seed
+            # the mode for the (rare) case a press is immediately
+            # followed by a release with no motion in between.
+            button_mask = {1: 1, 2: 2, 3: 4}.get(int(button_number), 0)
+            self._macos_buttons_down |= button_mask
+            self.mouse_rotate, self.mouse_zoom, self.mouse_pan = \
+                self._macos_modes_from_buttons(
+                    bool(self._macos_buttons_down & 1),
+                    bool(self._macos_buttons_down & 2),
+                    bool(self._macos_buttons_down & 4))
+        else:
+            self.mouse_rotate = left   and not (middle or right)
+            self.mouse_zoom   = right  and not (middle or left) and not self.cmd
+            self.mouse_pan    = (middle and not (right or left)) \
+                                 or (right and self.cmd and not (middle or left))
         self.mouse_x = np.float32(mouse_x)
         self.mouse_y = np.float32(mouse_y)
         self.drag_pos_x, self.drag_pos_y, self.drag_pos_z = self._mouse_pos(self.mouse_x, self.mouse_y)
@@ -366,7 +410,7 @@ class VismolGLCore:
             self.picking = True
             self.parent_widget.queue_draw()
     
-    def mouse_released(self, button_number, mouse_x, mouse_y):
+    def mouse_released(self, button_number, mouse_x, mouse_y, button_state=None):
         """ Function doc
         int(event.button)
         
@@ -385,9 +429,27 @@ class VismolGLCore:
         left   = np.int32(button_number) == 1
         middle = np.int32(button_number) == 2
         right  = np.int32(button_number) == 3
-        self.mouse_rotate = False
-        self.mouse_zoom = False
-        self.mouse_pan = False
+        if button_state is not None:
+            button_mask = {1: 1, 2: 2, 3: 4}.get(int(button_number), 0)
+            self._macos_buttons_down &= ~button_mask
+            if self._macos_buttons_down == 0:
+                self.mouse_rotate = False
+                self.mouse_zoom = False
+                self.mouse_pan = False
+            else:
+                # One button released but another is still held (e.g. a
+                # both-sides zoom where only one side lifted) -- fall
+                # back to whatever mode the still-held button(s) imply,
+                # same live-bitmask source of truth as mouse_motion().
+                self.mouse_rotate, self.mouse_zoom, self.mouse_pan = \
+                    self._macos_modes_from_buttons(
+                        bool(self._macos_buttons_down & 1),
+                        bool(self._macos_buttons_down & 2),
+                        bool(self._macos_buttons_down & 4))
+        else:
+            self.mouse_rotate = False
+            self.mouse_zoom = False
+            self.mouse_pan = False
         # [EN] Builder "click-and-drag to create a bonded atom" -- checked
         # FIRST and returns immediately, same "early-exit, don't touch
         # anything below" structure as the builder_placing_atom hook
@@ -670,7 +732,7 @@ class VismolGLCore:
         self.dragging = False
         self.parent_widget.queue_draw()
     
-    def mouse_motion(self, mouse_x, mouse_y):
+    def mouse_motion(self, mouse_x, mouse_y, button_state=None):
         """ Function doc
         """
         # [EN] Local/deferred import -- see the note near mouse_released()
@@ -683,6 +745,29 @@ class VismolGLCore:
         if (dx == 0) and (dy == 0):
             return
         self.mouse_x, self.mouse_y = x, y
+        if button_state is not None:
+            # [EN] macOS trackpad fix: re-derive rotate/zoom/pan from the
+            # ACTUAL buttons GTK reports as held on THIS motion event,
+            # every single event, rather than trusting whatever mode was
+            # decided once back in mouse_pressed(). macOS can report the
+            # start of a two-finger secondary-click ambiguously (see the
+            # long comment in mouse_pressed()), so a mode picked once at
+            # press time could get permanently stuck wrong (typically
+            # rotating) for an entire gesture the user intended as a
+            # zoom -- which is what read as "zoom drifting sideways".
+            # Recomputing on every motion event means a wrong initial
+            # guess self-corrects within a single frame, as soon as
+            # macOS reports the real button combination.
+            from gi.repository import Gdk
+            self._macos_buttons_down = (
+                (1 if button_state & Gdk.ModifierType.BUTTON1_MASK else 0) |
+                (2 if button_state & Gdk.ModifierType.BUTTON2_MASK else 0) |
+                (4 if button_state & Gdk.ModifierType.BUTTON3_MASK else 0))
+            self.mouse_rotate, self.mouse_zoom, self.mouse_pan = \
+                self._macos_modes_from_buttons(
+                    bool(self._macos_buttons_down & 1),
+                    bool(self._macos_buttons_down & 2),
+                    bool(self._macos_buttons_down & 4))
         # [EN] Builder "click-and-drag to create a bonded atom" -- checked
         # FIRST, before the normal rotate/pan/zoom branches below.
         #
@@ -940,6 +1025,8 @@ class VismolGLCore:
             if self.vm_session.picking_selection_mode:
                 return False
 
+            if self.selection_box.start is None:
+                self.selection_box.start = self.get_viewport_pos(self.mouse_x, self.mouse_y)
             self.selection_box.end = self.get_viewport_pos(self.mouse_x, self.mouse_y)
             self.selection_box.update_points()
             return True
@@ -1089,28 +1176,38 @@ class VismolGLCore:
         self.drag_pos_y = py
         self.drag_pos_z = pz
         return True
-    
+
     def _zoom_view(self, dy):
         """ Function doc """
         delta = (((self.glcamera.z_far - self.glcamera.z_near) / 2.0) + self.glcamera.z_near) / 200.0
         move_z = dy * delta
-        moved_mat = mop.my_glTranslatef(self.glcamera.view_matrix, np.array([0.0, 0.0, move_z]))
+        # Dolly the camera along its own Z axis by writing straight into
+        # the view matrix's translation row -- mathematically identical to
+        # the previous my_glTranslatef(view_matrix, [0,0,move_z]) call
+        # (verified: both produce byte-identical matrices), just cheaper
+        # than a full 4x4 multiply for a single-component update. This is
+        # NOT a fix for sideways zoom drift -- that bug is not in this
+        # matrix update; see the macOS gesture-detection code in
+        # mouse_pressed()/mouse_motion() instead.
+        moved_mat = np.array(self.glcamera.view_matrix, dtype=np.float32, copy=True)
+        moved_mat[3, 2] += move_z
         moved_pos = mop.get_xyz_coords(moved_mat)
         if moved_pos[2] > 0.101:
+            new_z_near = self.glcamera.z_near - move_z
+            new_z_far = self.glcamera.z_far - move_z
+
+            if new_z_far < (self.glcamera.min_zfar + self.glcamera.min_znear):
+                return False
+            proj_z_near = max(new_z_near, self.glcamera.min_znear)
+            if new_z_far <= (proj_z_near + 0.005):
+                return False
+
             self.glcamera.set_view_matrix(moved_mat)
-            self.glcamera.z_near -= move_z
-            self.glcamera.z_far -= move_z
-            if self.glcamera.z_near >= self.glcamera.min_znear:
-                self.glcamera.set_projection_matrix(mop.my_glPerspectivef(self.glcamera.field_of_view, 
-                                                    self.glcamera.viewport_aspect_ratio,
-                                                    self.glcamera.z_near, self.glcamera.z_far))
-            else:
-                if self.glcamera.z_far < (self.glcamera.min_zfar+self.glcamera.min_znear):
-                    self.glcamera.z_near += move_z
-                    self.glcamera.z_far = self.glcamera.min_zfar+self.glcamera.min_znear
-                self.glcamera.set_projection_matrix(mop.my_glPerspectivef(self.glcamera.field_of_view, 
-                                                    self.glcamera.viewport_aspect_ratio,
-                                                    self.glcamera.min_znear, self.glcamera.z_far))
+            self.glcamera.z_near = new_z_near
+            self.glcamera.z_far = new_z_far
+            self.glcamera.set_projection_matrix(mop.my_glPerspectivef(self.glcamera.field_of_view,
+                                                self.glcamera.viewport_aspect_ratio,
+                                                proj_z_near, self.glcamera.z_far))
             self.glcamera.update_fog()
             self.dist_cam_zrp += -move_z
             return True

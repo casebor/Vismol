@@ -287,6 +287,23 @@ class VismolGTKWidget(_WidgetBase):
                 return True
 
             self._gl_ctx.resize(width, height)
+            # [EN] BUG FIX (macOS trackpad zoom appeared to drift the
+            # molecule sideways): glfw.set_window_size() above resizes the
+            # hidden GLFW window/framebuffer, but -- unlike Gtk.GLArea on
+            # Linux/Windows, which re-applies the GL viewport for you on
+            # every resize -- it does NOT itself touch the GL viewport.
+            # Without this call the viewport stayed stuck at whatever size
+            # the hidden window had when _OffscreenGLContext was first
+            # created (the widget's construction-time default, 640x420),
+            # while vm_glcore.resize_window() (called from
+            # _size_allocate_macos) kept the CAMERA's aspect ratio/width/
+            # height/center_x/center_y correctly up to date for the real,
+            # current window size. That mismatch between the projection
+            # math (correct, current size) and the actual rasterization
+            # viewport (stale, old size) is forgiving for rotate (angle-
+            # only) but shows up as a sideways shift specifically while
+            # dollying the camera in/out during zoom.
+            glViewport(0, 0, width, height)
             self.vm_glcore.render()
             glFinish()
             data = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
@@ -317,15 +334,24 @@ class VismolGTKWidget(_WidgetBase):
 
     def mouse_pressed(self, widget, event):
         """ Function doc """
-        self.vm_glcore.mouse_pressed(event.button, event.x, event.y)
+        if _IS_MACOS:
+            self.vm_glcore.mouse_pressed(event.button, event.x, event.y, event.state)
+        else:
+            self.vm_glcore.mouse_pressed(event.button, event.x, event.y)
     
     def mouse_released(self, widget, event):
         """ Function doc """
-        self.vm_glcore.mouse_released(event.button, event.x, event.y)
+        if _IS_MACOS:
+            self.vm_glcore.mouse_released(event.button, event.x, event.y, event.state)
+        else:
+            self.vm_glcore.mouse_released(event.button, event.x, event.y)
     
     def mouse_motion(self, widget, event):
         """ Function doc """
-        self.vm_glcore.mouse_motion(event.x, event.y)
+        if _IS_MACOS:
+            self.vm_glcore.mouse_motion(event.x, event.y, event.state)
+        else:
+            self.vm_glcore.mouse_motion(event.x, event.y)
     
     def mouse_scroll(self, widget, event):
         """ Function doc
@@ -1404,4 +1430,3 @@ class PreviewWindow(Gtk.Window):
 def open_preview(image_array, glwidget):
     win = PreviewWindow(image_array, glwidget)
     win.show_all()
-
