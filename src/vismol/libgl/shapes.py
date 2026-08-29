@@ -155,12 +155,17 @@ def _make_gl_selection_dots(program, vismol_object):
     GL.glVertexAttribPointer(att_colors, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*colors.itemsize, ctypes.c_void_p(0))
     
     #vao_list.append(vao)
-    # [EN] macOS core-profile fix: disable attribute arrays FIRST, while
-    # the real VAO is still bound, then unbind (glDisableVertexAttribArray
-    # after glBindVertexArray(0) raises GL_INVALID_OPERATION under a
-    # strict core-profile driver).
-    GL.glDisableVertexAttribArray(att_position)
-    GL.glDisableVertexAttribArray(att_colors)
+    # [EN] BUG FIX (regression from an earlier "macOS core-profile fix"
+    # pass): this VAO is only ever re-bound for drawing elsewhere via
+    # GL.glBindVertexArray(vao) -- glEnableVertexAttribArray is called
+    # ABOVE, ONCE, during setup, and never again before a draw call.
+    # Vertex attribute enable/disable state is part of a VAO's OWN
+    # stored state (not global GL state), so calling
+    # glDisableVertexAttribArray here permanently disables these
+    # attributes on THIS vao, and nothing ever re-enables them: every
+    # subsequent draw silently renders nothing. There was never a good
+    # reason to disable them here -- glBindVertexArray(0) below already
+    # fully detaches this VAO's state from whatever gets bound/drawn next.
     GL.glBindVertexArray(0)
     GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
     GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
@@ -204,8 +209,9 @@ def _make_sel_gl_dots_surface(program, vismol_object):
     GL.glEnableVertexAttribArray(att_colors)
     GL.glVertexAttribPointer(att_colors, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*colors.itemsize, ctypes.c_void_p(0))
     
-    GL.glDisableVertexAttribArray(att_position)
-    GL.glDisableVertexAttribArray(att_colors)
+    # [EN] BUG FIX: see the identical comment in _make_gl_selection_dots()
+    # above -- disabling attribute arrays here permanently disables them
+    # on this VAO, since nothing re-enables them before the next draw.
     GL.glBindVertexArray(0)
     GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
     GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)

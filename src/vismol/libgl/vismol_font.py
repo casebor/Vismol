@@ -205,13 +205,22 @@ class VismolFont():
         GL.glEnableVertexAttribArray(gl_char_idx)
         GL.glVertexAttribPointer(gl_char_idx, 1, GL.GL_FLOAT, GL.GL_FALSE, char_idx.itemsize, ctypes.c_void_p(0))
         
-        # [EN] macOS core-profile fix: disable attribute arrays FIRST,
-        # while the real VAO is still bound, then unbind (disabling after
-        # glBindVertexArray(0) raises GL_INVALID_OPERATION under a strict
-        # core-profile driver).
-        GL.glDisableVertexAttribArray(gl_coord)
-        GL.glDisableVertexAttribArray(gl_texture)
-        GL.glDisableVertexAttribArray(gl_char_idx)
+        # [EN] BUG FIX (regression from an earlier "macOS core-profile
+        # fix" pass): this VAO is only ever re-bound for drawing via
+        # "GL.glBindVertexArray(self.vm_object.vm_font.vao)" in
+        # representations.py -- glEnableVertexAttribArray is called
+        # ABOVE, ONCE, during setup, and never again before a draw call.
+        # Vertex attribute enable/disable state is part of a VAO's OWN
+        # stored state (not global GL state), so calling
+        # glDisableVertexAttribArray here -- REGARDLESS of whether it
+        # happens before or after unbinding -- permanently disables
+        # these attributes on THIS vao, and nothing ever re-enables them:
+        # every subsequent draw silently renders nothing (no crash, no
+        # error -- the attributes are just off). This is what broke atom
+        # labels/picking labels/distance labels rendering entirely.
+        # There was never a good reason to disable them here in the
+        # first place -- glBindVertexArray(0) below already fully
+        # detaches this VAO's state from whatever gets bound/drawn next.
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
 
