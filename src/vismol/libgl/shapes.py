@@ -155,12 +155,16 @@ def _make_gl_selection_dots(program, vismol_object):
     GL.glVertexAttribPointer(att_colors, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*colors.itemsize, ctypes.c_void_p(0))
     
     #vao_list.append(vao)
-    GL.glBindVertexArray(0)
+    # [EN] macOS core-profile fix: disable attribute arrays FIRST, while
+    # the real VAO is still bound, then unbind (glDisableVertexAttribArray
+    # after glBindVertexArray(0) raises GL_INVALID_OPERATION under a
+    # strict core-profile driver).
     GL.glDisableVertexAttribArray(att_position)
     GL.glDisableVertexAttribArray(att_colors)
+    GL.glBindVertexArray(0)
     GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
     GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
-    
+
     vismol_object.selection_dots_vao      = vao
     vismol_object.selection_dot_buffers   = (ind_vbo, coord_vbo, col_vbo)
     return True
@@ -200,12 +204,12 @@ def _make_sel_gl_dots_surface(program, vismol_object):
     GL.glEnableVertexAttribArray(att_colors)
     GL.glVertexAttribPointer(att_colors, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*colors.itemsize, ctypes.c_void_p(0))
     
-    GL.glBindVertexArray(0)
     GL.glDisableVertexAttribArray(att_position)
     GL.glDisableVertexAttribArray(att_colors)
+    GL.glBindVertexArray(0)
     GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
     GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
-    
+
     vismol_object.sel_dots_surface_vao = vao
     vismol_object.sel_dots_surface_buffers = (ind_vbo, coord_vbo, col_vbo)
     return True

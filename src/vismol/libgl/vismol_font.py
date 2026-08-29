@@ -205,12 +205,16 @@ class VismolFont():
         GL.glEnableVertexAttribArray(gl_char_idx)
         GL.glVertexAttribPointer(gl_char_idx, 1, GL.GL_FLOAT, GL.GL_FALSE, char_idx.itemsize, ctypes.c_void_p(0))
         
-        GL.glBindVertexArray(0)
+        # [EN] macOS core-profile fix: disable attribute arrays FIRST,
+        # while the real VAO is still bound, then unbind (disabling after
+        # glBindVertexArray(0) raises GL_INVALID_OPERATION under a strict
+        # core-profile driver).
         GL.glDisableVertexAttribArray(gl_coord)
         GL.glDisableVertexAttribArray(gl_texture)
         GL.glDisableVertexAttribArray(gl_char_idx)
+        GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        
+
         self.vao = vao
         self.text_vbo = text_vbo
         self.coord_vbo = coord_vbo

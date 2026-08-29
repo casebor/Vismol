@@ -223,16 +223,16 @@ void main(){
 
 fragment_shader_picking_dots_safe = """
 #version 330
-precision highp float; 
+precision highp float;
 precision highp int;
 in vec3 index_color;
+out vec4 frag_color;
 
 void main(){
     float dist = length(gl_PointCoord.xy - vec2(0.5,0.5));
     if (dist > 0.6)
         discard;
-    gl_FragColor = vec4(index_color,1.0);
-    //gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+    frag_color = vec4(index_color,1.0);
 }
 
 """
@@ -268,17 +268,17 @@ void main(){
 
 fragment_shader_picking_dots = """
 #version 330
-precision highp float; 
+precision highp float;
 precision highp int;
 
 in vec3 index_color;
+out vec4 frag_color;
 
 void main(){
     float dist = length(gl_PointCoord.xy - vec2(0.5,0.5));
     if (dist > 0.6)
         discard;
-    gl_FragColor = vec4(index_color,1.0);
-    //gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+    frag_color = vec4(index_color,1.0);
 }
 
 """

@@ -216,6 +216,12 @@ class VismolGLCore:
         self.show_axis = True
         self.ctrl = False
         self.shift = False
+        # [EN] macOS trackpad fix: set True only by the Meta_L/R and
+        # Super_L/R key handlers in vismol_gtkwidget.py, which only exist
+        # on macOS -- stays permanently False on Linux/Windows, so the
+        # "and not self.cmd"/"or (... self.cmd ...)" gating below is a
+        # no-op there and mouse_pressed's behavior is unchanged.
+        self.cmd = False
         self.atom_picked = None
         self.selection_box_picking = False
         self.picking = False
@@ -252,9 +258,18 @@ class VismolGLCore:
         left   = np.int32(button_number) == 1
         middle = np.int32(button_number) == 2
         right  = np.int32(button_number) == 3
+        # [EN] macOS trackpad fix: MacBook trackpads have no middle
+        # button and no default gesture emulating one, so plain
+        # middle-drag pan was unreachable there. Cmd+right-drag (Cmd +
+        # two-finger-drag on a trackpad) now also pans, matching PyMOL's
+        # own Cmd+Right convention on macOS -- self.cmd is only ever set
+        # True by macOS-only key handlers (see vismol_gtkwidget.py), so
+        # this is a no-op everywhere else: plain right-drag still zooms,
+        # plain middle-drag still pans, unchanged.
         self.mouse_rotate = left   and not (middle or right)
-        self.mouse_zoom   = right  and not (middle or left)
-        self.mouse_pan    = middle and not (right  or left)
+        self.mouse_zoom   = right  and not (middle or left) and not self.cmd
+        self.mouse_pan    = (middle and not (right or left)) \
+                             or (right and self.cmd and not (middle or left))
         self.mouse_x = np.float32(mouse_x)
         self.mouse_y = np.float32(mouse_y)
         self.drag_pos_x, self.drag_pos_y, self.drag_pos_z = self._mouse_pos(self.mouse_x, self.mouse_y)

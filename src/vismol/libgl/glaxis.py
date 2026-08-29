@@ -389,13 +389,17 @@ void main()
         GL.glEnableVertexAttribArray(att_norm)
         GL.glVertexAttribPointer(att_norm, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*normals.itemsize, ctypes.c_void_p(0))
         
-        GL.glBindVertexArray(0)
+        # [EN] macOS core-profile fix: disable attribute arrays FIRST,
+        # while the real VAO is still bound, then unbind (disabling after
+        # glBindVertexArray(0) raises GL_INVALID_OPERATION under a strict
+        # core-profile driver).
         GL.glDisableVertexAttribArray(att_position)
         GL.glDisableVertexAttribArray(att_colors)
         GL.glDisableVertexAttribArray(att_norm)
+        GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
-        
+
         return vao
     
     def _get_vao_lines(self):
@@ -429,11 +433,11 @@ void main()
         GL.glEnableVertexAttribArray(att_colors)
         GL.glVertexAttribPointer(att_colors, 3, GL.GL_FLOAT, GL.GL_FALSE, 3*line_colors.itemsize, ctypes.c_void_p(0))
         
-        GL.glBindVertexArray(0)
         GL.glDisableVertexAttribArray(att_position)
         GL.glDisableVertexAttribArray(att_colors)
+        GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        
+
         return vao
     
     def _get_uniform_location(self, program, name):

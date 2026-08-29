@@ -168,15 +168,15 @@ vec3 up_8 = vec3( 0.939692620786, 0.000000000000,-0.342020143326); // up
 // The rotation matrix used for translating the cylinder points to their correct
 // places is rot_mat. This matrix is created using the my_glRotatef function,
 // see the function documentation to get more information.
-varying mat3 rot_mat;
+mat3 rot_mat;
 
 // mid_point is the middle point in the line.
-varying vec3 mid_point;
+vec3 mid_point;
 
 // These points are the vertices calculated for the cylinder.
-varying vec3 p_00, p_01, p_02, p_03, p_04, p_05, p_06, p_07, p_08;
-varying vec3 p_09, p_10, p_11, p_12, p_13, p_14, p_15, p_16, p_17;
-varying vec3 p_18, p_19, p_20, p_21, p_22, p_23, p_24, p_25, p_26;
+vec3 p_00, p_01, p_02, p_03, p_04, p_05, p_06, p_07, p_08;
+vec3 p_09, p_10, p_11, p_12, p_13, p_14, p_15, p_16, p_17;
+vec3 p_18, p_19, p_20, p_21, p_22, p_23, p_24, p_25, p_26;
 
 // Centros efetivos do cilindro atual. Para ligacao simples sao iguais a
 // geom_coord[0]/[1] e ao ponto medio. Para dupla/tripla, cada cilindro e

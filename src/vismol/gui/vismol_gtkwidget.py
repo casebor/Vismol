@@ -38,13 +38,106 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps, ImageChops
 import os
 import json
+import sys
 
-class VismolGTKWidget(Gtk.GLArea):
-    """ Object that contains the GLArea from GTK3+.
-        It needs a vertex and shader to be created, maybe later I"ll
-        add a function to change the shaders.
+# [EN] macOS/Quartz fix: GTK3's Quartz backend has a long-standing bug
+# where realizing a Gtk.GLArea corrupts Cairo/window compositing for the
+# ENTIRE containing NSWindow, leaving it permanently blank (reproduces
+# with a bare Gtk.Window containing nothing but a GLArea -- no
+# EasyHybrid/Vismol code involved). GTK4 has a real fix (GSK_RENDERER=gl)
+# but GTK3 has no equivalent, and running under XQuartz/X11 instead of
+# Quartz was also tried and rejected (GTK3's X11 GL path segfaults on
+# first draw on macOS). Neither backend has a working GtkGLArea on this
+# platform. Worked around by rendering OpenGL OUTSIDE of GTK's own
+# compositing entirely on macOS: VismolGTKWidget becomes a plain
+# Gtk.DrawingArea there, owning a hidden GLFW window purely to hold an
+# OpenGL context that's never attached to any GTK/AppKit view (see
+# _OffscreenGLContext below); the finished frame is read back with
+# glReadPixels and blitted into the DrawingArea's Cairo context. Linux/
+# Windows are completely unaffected -- this constant is decided once, at
+# import time, and every macOS-only code path below is gated behind it.
+_IS_MACOS = sys.platform == "darwin"
+_WidgetBase = Gtk.GLArea
+
+if _IS_MACOS:
+    import glfw
+    import cairo
+    _WidgetBase = Gtk.DrawingArea
+
+    class _OffscreenGLContext:
+        """ Owns a hidden GLFW window purely to hold an OpenGL 3.3 core
+            context and its default framebuffer -- never shown, never
+            attached to any GTK/AppKit view, so it never touches GTK's
+            Quartz compositing. Resized to match the DrawingArea's
+            current allocation before every draw (see
+            VismolGTKWidget._draw_macos).
+        """
+
+        def __init__(self, width, height):
+            if not glfw.init():
+                raise RuntimeError("Failed to initialize GLFW for the offscreen macOS GL context.")
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+            glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+            glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+            glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+            glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
+            glfw.window_hint(glfw.DEPTH_BITS, 24)
+            glfw.window_hint(glfw.ALPHA_BITS, 8)
+            self._window = glfw.create_window(max(int(width), 1), max(int(height), 1),
+                                               "", None, None)
+            if not self._window:
+                glfw.terminate()
+                raise RuntimeError("Failed to create the hidden GLFW window for the offscreen macOS GL context.")
+
+        def make_current(self):
+            glfw.make_context_current(self._window)
+
+        def resize(self, width, height):
+            glfw.set_window_size(self._window, max(int(width), 1), max(int(height), 1))
+
+
+def _patch_gl_line_width():
+    """ Apple's GL only guarantees glLineWidth(1.0) under a core profile
+        (GL_ALIASED_LINE_WIDTH_RANGE is commonly just [1.0, 1.0]). The
+        codebase calls glLineWidth() with wider values (2-5) in ~34
+        places across glaxis.py, representations.py and selection_box.py
+        for the axis gizmo, selection box and wire representations.
+        Rather than edit every call site, patched centrally here: every
+        one of those modules does "from OpenGL import GL" and calls
+        GL.glLineWidth(...), i.e. they all look up the function by
+        attribute on the *same shared* OpenGL.GL module object at call
+        time rather than binding their own copy at import time -- so
+        patching that one attribute once covers every call site. Not
+        gated to macOS: it's purely defensive (clamps the requested
+        width to whatever the driver actually reports), a no-op on
+        Linux/Mesa/NVIDIA where the supported range is normally wide.
     """
-    
+    from OpenGL import GL
+
+    if getattr(GL.glLineWidth, "_vismol_patched", False):
+        return
+
+    original_glLineWidth = GL.glLineWidth
+
+    def _clamped_glLineWidth(width):
+        try:
+            lo, hi = GL.glGetFloatv(GL.GL_ALIASED_LINE_WIDTH_RANGE)
+            width = min(max(width, lo), hi)
+        except Exception:
+            pass
+        return original_glLineWidth(width)
+
+    _clamped_glLineWidth._vismol_patched = True
+    GL.glLineWidth = _clamped_glLineWidth
+
+
+class VismolGTKWidget(_WidgetBase):
+    """ Object that contains the GLArea from GTK3+ (Gtk.GLArea on Linux/
+        Windows; a plain Gtk.DrawingArea + offscreen GLFW context on
+        macOS, see _IS_MACOS above). It needs a vertex and shader to be
+        created, maybe later I"ll add a function to change the shaders.
+    """
+
     def __init__(self, vismol_session=None, width=640.0, height=420.0):
         """ Class initialiser
         """
@@ -68,10 +161,26 @@ class VismolGTKWidget(Gtk.GLArea):
         # asks for exactly what #version 330 needs, on every platform,
         # instead of leaving it to a default that happens to work on
         # Linux by coincidence rather than by being explicitly correct.
-        self.set_required_version(3, 3)
-        self.connect("realize", self.initialize)
-        self.connect("render", self.render)
-        self.connect("resize", self.reshape)
+        if _IS_MACOS:
+            self._gl_initialized = False
+            self._gl_ctx = _OffscreenGLContext(width, height)
+            self.connect("draw", self._draw_macos)
+            self.connect("size-allocate", self._size_allocate_macos)
+            # vismol_glcore.initialize() calls these on self.parent_widget
+            # expecting the real Gtk.GLArea API -- no-op instance-level
+            # shims here since the offscreen GLFW window is always
+            # created with depth+alpha already (see _OffscreenGLContext).
+            # Instance-level (not class-level) so Linux/Windows, which
+            # never enters this branch, keeps using the real Gtk.GLArea
+            # methods untouched.
+            self.set_has_depth_buffer = lambda *args, **kwargs: None
+            self.set_has_alpha        = lambda *args, **kwargs: None
+        else:
+            self.set_required_version(3, 3)
+            self.connect("realize", self.initialize)
+            self.connect("render", self.render)
+            self.connect("resize", self.reshape)
+        _patch_gl_line_width()
         self.connect("key-press-event", self.key_pressed)
         self.connect("key-release-event", self.key_released)
         self.connect("button-press-event", self.mouse_pressed)
@@ -154,7 +263,58 @@ class VismolGTKWidget(Gtk.GLArea):
             needs to be re-drawed.
         """
         self.vm_glcore.render()
-    
+
+    if _IS_MACOS:
+        def _draw_macos(self, widget, cr):
+            """ macOS-only draw path (Gtk.DrawingArea "draw"/Cairo signal),
+                replacing the realize/render/resize trio used by
+                Gtk.GLArea on Linux/Windows -- see the _IS_MACOS comment
+                near the top of this file for why. Makes the offscreen
+                GLFW context current, resizes it to match this widget's
+                current allocation, renders the exact same scene via
+                vm_glcore.render(), reads the finished frame back with
+                glReadPixels, and blits it into the DrawingArea's Cairo
+                context.
+            """
+            self._gl_ctx.make_current()
+            if not self._gl_initialized:
+                self._gl_initialized = True
+                self.vm_glcore.initialize()
+
+            width  = self.get_allocated_width()
+            height = self.get_allocated_height()
+            if width <= 0 or height <= 0:
+                return True
+
+            self._gl_ctx.resize(width, height)
+            self.vm_glcore.render()
+            glFinish()
+            data = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
+
+            image = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 4))
+            # OpenGL's origin is bottom-left, Cairo/screen origin is top-left.
+            image = np.flip(image, axis=0)
+            # Cairo's ARGB32 format is 4-byte-per-pixel B,G,R,A in memory
+            # on little-endian (Apple Silicon is LE); background/geometry
+            # in this view are always fully opaque, so straight vs.
+            # premultiplied alpha makes no visible difference here.
+            bgra = np.ascontiguousarray(image[:, :, [2, 1, 0, 3]])
+
+            surface = cairo.ImageSurface.create_for_data(
+                bytearray(bgra.tobytes()), cairo.FORMAT_ARGB32, width, height, width * 4)
+            cr.set_source_surface(surface, 0, 0)
+            cr.paint()
+            return True
+
+        def _size_allocate_macos(self, widget, allocation):
+            """ macOS-only resize path (Gtk.DrawingArea "size-allocate"
+                signal), equivalent to reshape() used by Gtk.GLArea on
+                Linux/Windows -- updates the camera/projection to match
+                the new size and asks for a redraw.
+            """
+            self.vm_glcore.resize_window(allocation.width, allocation.height)
+            self.queue_draw()
+
     def mouse_pressed(self, widget, event):
         """ Function doc """
         self.vm_glcore.mouse_pressed(event.button, event.x, event.y)
@@ -281,7 +441,37 @@ class VismolGTKWidget(Gtk.GLArea):
     def _released_Shift_L(self):
         """ Function doc """
         self.vm_glcore.shift = False
-    
+
+    if _IS_MACOS:
+        # [EN] macOS trackpad fix: camera panning is bound to a
+        # middle-mouse-button drag (vismol_glcore.py), but MacBook
+        # trackpads have no middle button and no default gesture that
+        # emulates one -- panning was effectively unreachable from a
+        # trackpad. Holding Cmd while right-dragging (Cmd + two-finger-
+        # drag on a trackpad) now also triggers pan (see
+        # VismolGLCore.mouse_pressed's "and not self.cmd"/"or (... and
+        # self.cmd ...)" gating), matching PyMOL's own Cmd+Right =
+        # translate convention on macOS. Which keyval GTK reports for the
+        # Cmd key can vary by GTK version/backend/keymap (only Meta_L was
+        # actually observed on the tested setup); all four are wired as
+        # cheap insurance. Gated to macOS only -- Meta_L/Super_L are real,
+        # occasionally-bound X11 keysyms on Linux, so leaving these
+        # handlers undefined there guarantees zero behavior change.
+        def _pressed_Meta_L(self):
+            """ Function doc """
+            self.vm_glcore.cmd = True
+
+        def _released_Meta_L(self):
+            """ Function doc """
+            self.vm_glcore.cmd = False
+
+        _pressed_Meta_R  = _pressed_Meta_L
+        _released_Meta_R = _released_Meta_L
+        _pressed_Super_L  = _pressed_Meta_L
+        _released_Super_L = _released_Meta_L
+        _pressed_Super_R  = _pressed_Meta_L
+        _released_Super_R = _released_Meta_L
+
     # [EN] Builder keyboard shortcuts ('a'/'d'/'b') -- only act while
     # Builder editing mode is on (builder_atom_mode), so these letter
     # keys don't hijack anything when the Builder isn't in use (e.g. if
@@ -557,11 +747,14 @@ class VismolGTKWidget(Gtk.GLArea):
                      could not be made current or the offscreen
                      framebuffer (when scale_factor > 1) failed.
         """
-        self.make_current()
+        if _IS_MACOS:
+            self._gl_ctx.make_current()
+        else:
+            self.make_current()
 
-        if self.get_error() is not None:
-            dprint("Error in OpenGL context")
-            return None
+            if self.get_error() is not None:
+                dprint("Error in OpenGL context")
+                return None
 
         if scale_factor != 1:
             # vm_glcore.render_to_image() handles the offscreen
