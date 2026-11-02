@@ -150,9 +150,14 @@ class VismolFont():
         # Generate texture data
         #self.font_buffer = np.zeros((height*6, width*16), dtype=np.ubyte)
         self.font_buffer = np.zeros((height*6, width*16), dtype=np.ubyte)
+        # 2026-11-01: pen advance of each glyph, as a fraction of the cell
+        # width (the cell is as wide as the widest glyph), for proportional
+        # labels -- see VismolGLCore._draw_value_label()
+        self.glyph_advance = {}
         for j in range(6):
             for i in range(16):
                 face.load_char(chr(32+j*16+i), ft.FT_LOAD_RENDER | ft.FT_LOAD_FORCE_AUTOHINT )
+                self.glyph_advance[chr(32+j*16+i)] = face.glyph.advance.x / 64.0 / max(width, 1)
                 bitmap = face.glyph.bitmap
                 x = i*width  + face.glyph.bitmap_left
                 y = j*height + ascender - face.glyph.bitmap_top

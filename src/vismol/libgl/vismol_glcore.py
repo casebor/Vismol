@@ -202,7 +202,7 @@ class VismolGLCore:
         self.vm_font.zoom_sensitivity = _labels_zoom_sensitivity
         self.vm_font_static = VismolFont(font_file=_label_font_path, char_width=_label_font_size,
                                           char_height=_label_font_size, color=[1, 1, 1, 1])
-        self.vm_font_dist   = VismolFont(char_res=264, font_file=_label_font_path,
+        self.vm_font_dist   = VismolFont(char_res=64, font_file=_label_font_path,
                                           char_width=_dist_font_size, char_height=_dist_font_size,
                                           color = [1, 1, 1, 1])
         self.vm_font_dist.zoom_sensitivity = _labels_zoom_sensitivity
@@ -2603,6 +2603,32 @@ class VismolGLCore:
 
 
         
+    def _picked_id_near(self, x, y, background_id = 16777215):
+        """ Colour ID under (x, y) (OpenGL window coordinates) of the picking
+            pass; when that pixel is background, the ID of the nearest
+            non-background pixel within gl_parameters["picking_radius"]
+            pixels (default 6; 0 = the single pixel, as before). The pixel
+            under the cursor always wins, so precise clicks are unchanged. """
+        radius = int(self.vm_session.vm_config.gl_parameters.get("picking_radius", 6) or 0)
+        x0, y0 = max(x - radius, 0), max(y - radius, 0)
+        x1 = min(x + radius, int(self.width) - 1)
+        y1 = min(y + radius, int(self.height) - 1)
+        if radius <= 0 or x1 < x0 or y1 < y0:
+            data = GL.glReadPixels(x, y, 1, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            return data[0] + data[1] * 256 + data[2] * 256 * 256
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        data = GL.glReadPixels(x0, y0, w, h, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        rgba = np.frombuffer(data, dtype=np.uint8).reshape((h, w, 4)).astype(np.int64)
+        ids = rgba[:, :, 0] + (rgba[:, :, 1] << 8) + (rgba[:, :, 2] << 16)
+        rows, cols = np.nonzero(ids != background_id)
+        if rows.size == 0:
+            return background_id
+        d2 = (cols + x0 - x) ** 2 + (rows + y0 - y) ** 2
+        k = int(np.argmin(d2))
+        if d2[k] > radius * radius:          # circle, not the square window
+            return background_id
+        return int(ids[rows[k], cols[k]])
+
     def _pick(self):
         """
         Perform single-pixel picking using color-encoded IDs.
@@ -2636,11 +2662,9 @@ class VismolGLCore:
         x = int(self.picking_x)
         y = int(self.height - self.picking_y)
 
-        # Read single pixel
-        data = GL.glReadPixels(x, y, 1, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-
-        # Decode RGB → ID
-        pickedID = data[0] + data[1] * 256 + data[2] * 256 * 256
+        # 2026-11-01: nearest atom within a few pixels of the click, not only
+        # the pixel under it (thin lines were hard to hit)
+        pickedID = self._picked_id_near(x, y, BACKGROUND_ID)
 
         atom_dic = self.vm_session.atom_dic_id
 
@@ -2999,7 +3023,7 @@ class VismolGLCore:
         if changed:
             GL.glUniform3fv(loc, 1, self.bckgrnd_color[:3])
     
-    def _draw_text_labels(self, vm_font, entries, string_shift=(0.0, 0.0), char_spacing=1.0):
+    def _draw_text_labels(self, vm_font, entries, string_shift=(0.0, 0.0), char_spacing=1.0, advances=None):
         """ [EN] Unified label/text drawing routine, shared by
             _draw_labels(), _draw_distance_labels(), _draw_picking_label()
             and representations.LabelRepresentation.draw_representation()
@@ -3057,6 +3081,11 @@ class VismolGLCore:
                                 char width (1.0 = the default spacing;
                                 < 1 packs the glyphs, e.g. multi-digit
                                 atom indices).
+                advances -- optional {char: advance} (fraction of the char
+                            width, e.g. VismolFont.glyph_advance) for
+                            proportional spacing; characters not in it
+                            advance by char_spacing. -sum(advances)/2 as
+                            x_shift centres the string.
 
             Returns the number of glyphs (GL_POINTS) drawn.
         """
@@ -3077,6 +3106,7 @@ class VismolGLCore:
                 x_shift = 0.0
             point = np.array([x, y, z, 1], dtype=np.float32)
             point = np.dot(point, self.model_mat)
+            pos = 0.0
             for i, c in enumerate(text):
                 c_id = ord(c)
                 cx = c_id % 16
@@ -3092,7 +3122,14 @@ class VismolGLCore:
                 uv_coords.append(cy * vm_font.text_v)
                 uv_coords.append((cx + 1) * vm_font.text_u)
                 uv_coords.append((cy + 1) * vm_font.text_v)
-                char_idx.append(float(i) * char_spacing + x_shift)
+                if advances is None:
+                    char_idx.append(float(i) * char_spacing + x_shift)
+                else:
+                    # proportional: each glyph sits at the pen position,
+                    # like ordinary text (glyphs are drawn at the left of
+                    # their atlas cell, at their own bearing)
+                    char_idx.append(pos + x_shift)
+                    pos += advances.get(c, char_spacing)
         
         chars = len(char_idx)
         if chars == 0:
@@ -3145,13 +3182,37 @@ class VismolGLCore:
                 entries.append((text, atom.coords(frame)))
         self._draw_text_labels(self.vm_font, entries)
 
+    # 2026-11-01: the distance / angle / dihedral values are laid out with
+    # the font's own glyph advances (VismolFont.glyph_advance) -- one atlas
+    # cell per character (as wide as the widest glyph) left the digits far
+    # apart. DIST_LABEL_TRACKING: extra room between glyphs (1.0 = the
+    # font's spacing); DIST_LABEL_SPACING: fallback before the atlas exists.
+    DIST_LABEL_TRACKING = 1.05
+    DIST_LABEL_SPACING  = 0.7
+
+    def _draw_value_label(self, text, pos):
+        s = self.DIST_LABEL_SPACING
+        font = self.vm_font_dist
+        glyph = getattr(font, "glyph_advance", None) or {}
+        # the atlas cell is stretched over the glyph quad (2 * offset wide),
+        # while char_idx counts in char_width units
+        cell = 2.0 * float(font.offset[0]) / float(font.char_width or 1)
+        adv = {c: glyph[c] * cell * self.DIST_LABEL_TRACKING for c in set(text) if c in glyph}
+        width = sum(adv.get(c, s) for c in text)
+        # the quad is centred on the pen position and the glyph drawn at the
+        # left of its cell: the text spans [-cell/2, width - cell/2]
+        self._draw_text_labels(self.vm_font_dist, [(text, pos, (cell - width) / 2.0)],
+                               char_spacing=s, advances=adv)
+
     def _draw_distance_labels(self, vm_object):
         """ Draws the numeric distance label ("1.23") at the midpoint of
             a picking distance/dash line.
         """
         if self.vm_font_dist.vao is None:
             self.vm_font_dist.color = np.array(self.vm_session.vm_config.gl_parameters["pk_dist_label_color"], dtype=np.float32)
-        self.vm_font_dist.char_res = 15
+        # 2026-11-01: no "char_res = 15" here any more -- it was set before
+        # the atlas was built, so the values were rasterised at 15 px and
+        # blurred when scaled up (the #1..#4 labels use 64 px)
         text = '{:.2f}'.format(vm_object.dist)
         midpoint = (vm_object.midpoint[0], vm_object.midpoint[1], vm_object.midpoint[2])
         # x_shift = -len(text)/2.0 centers the string on the midpoint
@@ -3159,8 +3220,9 @@ class VismolGLCore:
         # its first character there -- replaces the old "-0.2"
         # world-space fudge factor, now applied in screen-aligned space
         # by the shader so it no longer skews with camera rotation.
-        self._draw_text_labels(self.vm_font_dist, [(text, midpoint, -len(text) / 2.0)])
-    
+        # 2026-11-01: glyphs packed, proportional (_draw_value_label)
+        self._draw_value_label(text, midpoint)
+
     def _draw_arc_labels(self, vm_object):
         """ The value of an angle or dihedral arc of the picked atoms (degrees). """
         text = getattr(vm_object, "label_text", None)
@@ -3169,8 +3231,7 @@ class VismolGLCore:
             return
         if self.vm_font_dist.vao is None:
             self.vm_font_dist.color = np.array(self.vm_session.vm_config.gl_parameters["pk_dist_label_color"], dtype=np.float32)
-        self.vm_font_dist.char_res = 15
-        self._draw_text_labels(self.vm_font_dist, [(text, (pos[0], pos[1], pos[2]), -len(text) / 2.0)])
+        self._draw_value_label(text, (pos[0], pos[1], pos[2]))
 
     def _draw_picking_label(self):
         """ This function draws the labels of the atoms selected by the

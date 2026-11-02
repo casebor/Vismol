@@ -494,6 +494,10 @@ class VismolPickingSelection:
                     pass
                 pass
             n+=1
+        # 2026-11-01: arcs of the angle / dihedral follow the picks also when
+        # they are removed (update_angle_arcs() was only reached through
+        # generate_pk_representations(), i.e. never once every pk was cleared)
+        self.update_angle_arcs()
             
     def generate_pk_representations (self, vobj_label = "pk1", atom = None):
         """ Function doc """
@@ -753,7 +757,9 @@ class VismolPickingSelection:
         color = self._gl_parameters().get(key, self.ARC_COLORS.get(label, (1, 1, 1)))
         return color[:3]
 
-    def _set_arc_object(self, label, points, text = None, text_pos = None):
+    def _set_arc_object(self, label, points, text = None, text_pos = None, center = None):
+        """ center: when given (dihedral, 2026-11-01), it is appended as the
+            last point and joined to both ends of the arc -- the two radii. """
         dic = self.vm_session.vm_geometric_object_dic
         obj = dic.get(label)
         if points is None:
@@ -762,6 +768,11 @@ class VismolPickingSelection:
                 obj.label_text = None
             return
         color = self._arc_color(label)
+        n_arc = len(points)
+        bonds = [k for i in range(n_arc - 1) for k in (i, i + 1)]
+        if center is not None:
+            points = list(points) + [center]
+            bonds += [n_arc, 0, n_arc, n_arc - 1]
         frame = np.asarray(points, dtype = np.float32)
         n = len(frame)
         if obj is None or len(obj.atoms) != n:
@@ -775,7 +786,7 @@ class VismolPickingSelection:
                 obj.atoms[i] = atom
             obj._generate_color_vectors(-1)
             obj.active = True
-            obj.index_bonds = [k for i in range(n - 1) for k in (i, i + 1)]
+            obj.index_bonds = bonds
             obj.create_representation(rep_type = "dash")
             dic[label] = obj
         else:
@@ -841,7 +852,8 @@ class VismolPickingSelection:
                     dihedral_pos  = m + 1.35 * r * (np.cos(mid) * e1 + np.sin(mid) * e2)
                     dihedral_text = '{:.1f}'.format(np.degrees(phi))
         self._set_arc_object("pk_angle", angle_points, angle_text, angle_pos)
-        self._set_arc_object("pk_dihedral", dihedral_points, dihedral_text, dihedral_pos)
+        self._set_arc_object("pk_dihedral", dihedral_points, dihedral_text, dihedral_pos,
+                             center = m if dihedral_points is not None else None)
 
     def get_angle_pk1_pk2_pk3 (self):
         """ Function doc """
